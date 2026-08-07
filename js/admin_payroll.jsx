@@ -1,4 +1,4 @@
-/* Payroll: run for month, payslip modal, CSV export */
+/* Payroll: month view, payslip modal, CSV export */
 function PayslipModal({ payslip, emp, onClose }) {
   if (!payslip || !emp) return null;
   const site = Store.getSite(emp.siteId);
@@ -61,11 +61,28 @@ function PayslipModal({ payslip, emp, onClose }) {
               <tbody>
                 <tr className="border-b border-slate-200"><td className="py-1.5">Basic salary</td><td className="text-right font-mono font-semibold">{fmtINR(payslip.base)}</td></tr>
                 <tr className="border-b border-slate-200"><td className="py-1.5">Incentive ({payslip.incentiveSlab.label})</td><td className="text-right font-mono font-semibold text-emerald-700">+ {fmtINR(payslip.incentive)}</td></tr>
+                {/* Threshold rules that fired this month, itemised under the incentive line */}
+                {(payslip.incentiveBreakdown?.applied || []).map((r, i) => (
+                  <tr key={r.id || i} className="border-b border-slate-100">
+                    <td className="py-1 pl-4 text-[11px] text-slate-500">
+                      ↳ {r.scope === 'store' ? 'Store rule' : 'Employee rule'} · {+r.minSales > 0 ? `above ${fmtINR(+r.minSales)}` : 'no minimum'} · {r.type === 'pct' ? r.value + '%' : fmtINR(+r.value)}
+                    </td>
+                    <td className="text-right font-mono text-[11px] text-slate-500">{fmtINR(r.amount)}</td>
+                  </tr>
+                ))}
                 {payslip.travelAllowance > 0 && <tr className="border-b border-slate-200"><td className="py-1.5">Travel allowance</td><td className="text-right font-mono font-semibold text-emerald-700">+ {fmtINR(payslip.travelAllowance)}</td></tr>}
                 <tr className="font-bold"><td className="py-1.5">Gross earnings</td><td className="text-right font-mono">{fmtINR(payslip.base + payslip.incentive + payslip.travelAllowance)}</td></tr>
               </tbody>
             </table>
             <div className="text-[10px] text-slate-500 mt-1">Sales achieved: {fmtINR(payslip.sales)}</div>
+            {payslip.incentiveCapped && (
+              <div className="text-[10px] text-amber-700 mt-1">Incentive capped at the ₹20,000 monthly ceiling.</div>
+            )}
+            {(payslip.incentiveBreakdown?.pending || []).length > 0 && (
+              <div className="text-[10px] text-slate-400 mt-0.5">
+                {payslip.incentiveBreakdown.pending.length} rule{payslip.incentiveBreakdown.pending.length !== 1 ? 's' : ''} not triggered — sales below threshold.
+              </div>
+            )}
           </div>
           <div>
             <div className="text-[11px] uppercase tracking-wide text-slate-500 font-bold mb-2">Deductions</div>
@@ -97,10 +114,8 @@ function PayslipModal({ payslip, emp, onClose }) {
 
 function PayrollPage({ user }) {
   const store = useStore();
-  const toast = useToast();
   const [month, setMonth] = useState('2026-06');
   const [selected, setSelected] = useState(null);
-  const [running, setRunning] = useState(false);
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
   const emps = store.getEmployees({ status: 'active' });
@@ -124,15 +139,6 @@ function PayrollPage({ user }) {
   const PER = 25;
   const pages = Math.ceil(filtered.length / PER) || 1;
   const pageSlips = filtered.slice(page * PER, page * PER + PER);
-
-  const doRun = () => {
-    setRunning(true);
-    setTimeout(() => {
-      Store.runPayroll(month);
-      setRunning(false);
-      toast(`Payroll processed for ${payslips.length} employees · Net payout ${fmtINR(totals.net)}`, 'success', 4500);
-    }, 900);
-  };
 
   const exportAll = () => {
     downloadCSV(`payroll_${month}.csv`, [
@@ -158,9 +164,6 @@ function PayrollPage({ user }) {
             <option value="2026-07">July 2026 (in progress)</option>
           </Select>
           <Btn onClick={exportAll}><Icon name="download" className="w-3.5 h-3.5"/>Export payout report</Btn>
-          <Btn variant="primary" onClick={doRun} disabled={running}>
-            {running ? <><Icon name="refresh" className="w-3.5 h-3.5 animate-spin"/>Processing…</> : <><Icon name="send" className="w-3.5 h-3.5"/>{run ? 'Re-run' : 'Run'} payroll</>}
-          </Btn>
         </div>
       </div>
 

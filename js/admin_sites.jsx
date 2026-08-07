@@ -1,56 +1,94 @@
 /* Client-location (store) management — real hierarchy (zone/region/BM/CM),
    store-specific incentive slab, geo-fence, filter + pagination + map picker. */
 
-/* ---- Shared incentive row editor — used in Sites and Employees pages ---- */
+/* ---- Shared incentive row editor — used in Sites and Employees pages ----
+
+   Each row is an INDEPENDENT rule: "once monthly sales cross <Sales from>,
+   pay <value>". Rules do not override one another the way slab tiers do —
+   every rule that clears its threshold pays, and they add up. */
+
+/* Plain-English preview of a single rule, e.g.
+   "Pays 10% of sales once monthly sales cross ₹50,000". */
+function incentiveRuleText(row) {
+  const min = +row.minSales || 0;
+  const val = +row.value || 0;
+  if (!val) return 'Set a value to activate this rule';
+  const pay = row.type === 'pct' ? val + '% of sales' : fmtINR(val);
+  return min > 0
+    ? `Pays ${pay} once monthly sales cross ${fmtINR(min)}`
+    : `Pays ${pay} from the first rupee of sales`;
+}
+
 function IncentiveEditor({ incentives, onChange }) {
-  const addRow = () => onChange([...(incentives || []), { id: 'inc_' + Math.random().toString(36).slice(2, 8), type: 'pct', value: '' }]);
-  const updateRow = (id, patch) => onChange((incentives || []).map((r) => r.id === id ? { ...r, ...patch } : r));
-  const removeRow = (id) => onChange((incentives || []).filter((r) => r.id !== id));
+  const rows = incentives || [];
+  const addRow = () => onChange([...rows, { id: 'inc_' + Math.random().toString(36).slice(2, 8), minSales: '', type: 'pct', value: '' }]);
+  const updateRow = (id, patch) => onChange(rows.map((r) => r.id === id ? { ...r, ...patch } : r));
+  const removeRow = (id) => onChange(rows.filter((r) => r.id !== id));
 
   return (
     <div>
       <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
-        {(incentives || []).length > 0 && (
-          <div className="grid grid-cols-[1fr_1fr_auto] gap-2 px-3 py-1.5 text-[10px] uppercase font-bold text-slate-500 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700">
-            <div>Incentive Type</div><div>Value</div><div/>
+        {rows.length > 0 && (
+          <div className="grid grid-cols-[1.1fr_1fr_1fr_auto] gap-2 px-3 py-1.5 text-[10px] uppercase font-bold text-slate-500 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700">
+            <div>Sales from (₹)</div><div>Incentive Type</div><div>Value</div><div/>
           </div>
         )}
-        {(incentives || []).map((row) => (
-          <div key={row.id} className="grid grid-cols-[1fr_1fr_auto] gap-2 px-3 py-2 items-center border-b border-slate-100 dark:border-slate-800 last:border-0">
-            <select
-              value={row.type}
-              onChange={(e) => updateRow(row.id, { type: e.target.value })}
-              className="h-8 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[12px] text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-brand-500/30"
-            >
-              <option value="pct">Percentage (%)</option>
-              <option value="flat">Fixed Amount (₹)</option>
-            </select>
-            <div className="relative">
-              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] font-semibold text-slate-400 select-none">
-                {row.type === 'pct' ? '%' : '₹'}
-              </span>
-              <input
-                type="number"
-                min="0"
-                step={row.type === 'pct' ? '0.1' : '1'}
-                value={row.value}
-                onChange={(e) => updateRow(row.id, { value: e.target.value })}
-                className="w-full h-8 pl-6 pr-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[12px] text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-brand-500/30"
-                placeholder={row.type === 'pct' ? '10' : '5000'}
-              />
+        {rows.map((row) => (
+          <div key={row.id} className="px-3 py-2 border-b border-slate-100 dark:border-slate-800 last:border-0">
+            <div className="grid grid-cols-[1.1fr_1fr_1fr_auto] gap-2 items-center">
+              <div className="relative">
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] font-semibold text-slate-400 select-none">₹</span>
+                <input
+                  type="number" min="0" step="1000"
+                  value={row.minSales == null ? '' : row.minSales}
+                  onChange={(e) => updateRow(row.id, { minSales: e.target.value })}
+                  className="w-full h-8 pl-6 pr-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[12px] text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-brand-500/30"
+                  placeholder="50000"
+                />
+              </div>
+              <select
+                value={row.type}
+                onChange={(e) => updateRow(row.id, { type: e.target.value })}
+                className="h-8 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[12px] text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-brand-500/30"
+              >
+                <option value="pct">Percentage (%)</option>
+                <option value="flat">Fixed Amount (₹)</option>
+              </select>
+              <div className="relative">
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] font-semibold text-slate-400 select-none">
+                  {row.type === 'pct' ? '%' : '₹'}
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step={row.type === 'pct' ? '0.1' : '1'}
+                  value={row.value}
+                  onChange={(e) => updateRow(row.id, { value: e.target.value })}
+                  className="w-full h-8 pl-6 pr-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[12px] text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-brand-500/30"
+                  placeholder={row.type === 'pct' ? '10' : '2000'}
+                />
+              </div>
+              <button onClick={() => removeRow(row.id)} className="w-7 h-7 flex items-center justify-center rounded-md text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 transition">
+                <Icon name="trash" className="w-3.5 h-3.5"/>
+              </button>
             </div>
-            <button onClick={() => removeRow(row.id)} className="w-7 h-7 flex items-center justify-center rounded-md text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 transition">
-              <Icon name="trash" className="w-3.5 h-3.5"/>
-            </button>
+            <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-1">
+              <Icon name="info" className="w-3 h-3 shrink-0 text-slate-400"/>{incentiveRuleText(row)}
+            </div>
           </div>
         ))}
-        {(incentives || []).length === 0 && (
+        {rows.length === 0 && (
           <div className="px-3 py-3 text-[11px] text-slate-500 italic">No incentives defined — click "Add Incentive" to begin.</div>
         )}
       </div>
-      <button onClick={addRow} className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-brand-700 dark:text-brand-300 hover:text-brand-800 dark:hover:text-brand-200 transition">
-        <Icon name="plus" className="w-3.5 h-3.5"/>Add Incentive
-      </button>
+      <div className="flex items-center justify-between gap-2 mt-2">
+        <button onClick={addRow} className="flex items-center gap-1.5 text-[11px] font-semibold text-brand-700 dark:text-brand-300 hover:text-brand-800 dark:hover:text-brand-200 transition">
+          <Icon name="plus" className="w-3.5 h-3.5"/>Add Incentive
+        </button>
+        {rows.length > 1 && (
+          <span className="text-[10px] text-slate-400">Each rule is independent — every rule that clears its threshold pays.</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -62,20 +100,30 @@ function SitesPage({ user }) {
   const [q, setQ] = useState('');
   const [zone, setZone] = useState('all');
   const [region, setRegion] = useState('all');
+  const [teamLead, setTeamLead] = useState('all');
   const [page, setPage] = useState(0);
 
   const sites = store.getSites();
   const hierarchy = store.getHierarchy();
   const templates = store.getSlabTemplates();
+  const teamLeads = store.getTeamLeads();
   const tplById = useMemo(() => Object.fromEntries(templates.map((t) => [t.id, t])), [store.state]);
   const staffBySite = useMemo(() => {
     const m = {}; store.getEmployees({ status: 'active' }).forEach((e) => { m[e.siteId] = (m[e.siteId] || 0) + 1; }); return m;
   }, [store.state]);
+  // Team Lead picker narrows with the zone/region filters so it stays usable at 54 leads.
+  const teamLeadsInScope = teamLeads.filter((m) =>
+    (zone === 'all' || m.zone === zone) && (region === 'all' || m.region === region));
 
   const filtered = sites.filter((s) => {
     if (zone !== 'all' && s.zone !== zone) return false;
     if (region !== 'all' && s.region !== region) return false;
-    if (q) { const ql = q.toLowerCase(); if (!((s.name || '').toLowerCase().includes(ql) || (s.code || '').toLowerCase().includes(ql) || (s.city || '').toLowerCase().includes(ql) || (s.cm || '').toLowerCase().includes(ql) || (s.bm || '').toLowerCase().includes(ql))) return false; }
+    if (teamLead !== 'all' && s.teamLeadId !== teamLead) return false;
+    if (q) {
+      const ql = q.toLowerCase();
+      const mgr = s.managerId ? (store.getEmployee(s.managerId) || {}).name || '' : '';
+      if (!((s.name || '').toLowerCase().includes(ql) || (s.code || '').toLowerCase().includes(ql) || (s.city || '').toLowerCase().includes(ql) || (s.cm || '').toLowerCase().includes(ql) || (s.bm || '').toLowerCase().includes(ql) || mgr.toLowerCase().includes(ql))) return false;
+    }
     return true;
   });
   const PER = 20;
@@ -85,20 +133,45 @@ function SitesPage({ user }) {
 
   const save = () => { Store.upsertSite(editing); toast('Site saved', 'success'); setEditing(null); };
 
+  /* Manager pickers for the edit modal, scoped to the store being edited so the
+     lists stay short: Team Leads within the chosen zone/state, Business Managers
+     within the zone, and Store Managers from that store's own technicians. */
+  const teamLeadOptions = useMemo(() => {
+    if (!editing) return [];
+    const inScope = teamLeads.filter((m) => (!editing.zone || m.zone === editing.zone) && (!editing.region || m.region === editing.region));
+    const list = inScope.length ? inScope : teamLeads;
+    // Never hide the currently-assigned lead, even if the store's zone was changed.
+    return editing.teamLeadId && !list.some((m) => m.id === editing.teamLeadId)
+      ? [store.getTeamLead(editing.teamLeadId)].filter(Boolean).concat(list) : list;
+  }, [editing && editing.zone, editing && editing.region, editing && editing.teamLeadId, store.state]);
+
+  const bmOptions = useMemo(() => {
+    if (!editing) return [];
+    const inScope = store.getBusinessManagers().filter((m) => !editing.zone || m.zone === editing.zone);
+    const list = inScope.length ? inScope : store.getBusinessManagers();
+    return editing.bmId && !list.some((m) => m.id === editing.bmId)
+      ? [store.getBusinessManager(editing.bmId)].filter(Boolean).concat(list) : list;
+  }, [editing && editing.zone, editing && editing.bmId, store.state]);
+
+  const storeStaff = useMemo(
+    () => (editing && editing.id ? store.getEmployees({ siteId: editing.id, status: 'active' }) : []),
+    [editing && editing.id, store.state]
+  );
+
   return (
     <div className="space-y-4">
       <div className="flex items-end justify-between flex-wrap gap-3">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Deployments</div>
           <div className="text-xl font-bold text-slate-900 dark:text-white">Client stores & geo-fences</div>
-          <div className="text-[12px] text-slate-500 mt-0.5">{sites.length} stores · {(hierarchy.zones || []).length} zones · {(hierarchy.regions || []).length} regions · {(hierarchy.businessManagers || []).length} Business Managers · {(hierarchy.clusterManagers || []).length} Cluster Managers</div>
+          <div className="text-[12px] text-slate-500 mt-0.5">{sites.length} stores · {(hierarchy.zones || []).length} zones · {(hierarchy.regions || []).length} states · {teamLeads.length} Team Leads · {(hierarchy.businessManagers || []).length} Business Managers</div>
         </div>
         <div className="flex items-center gap-2">
           <Btn onClick={() => downloadCSV('stores.csv', [
-            ['Code','Store','City','Region','Zone','Business Manager','Cluster Manager','Slab','Active staff'],
-            ...filtered.map((s) => [s.code, s.name, s.city, s.region, s.zone, s.bm, s.cm, tplById[s.slabId]?.label || '—', staffBySite[s.id] || 0]),
+            ['Code','Store','City','State','Zone','Store Manager','Team Lead','Business Manager','Slab','Active staff'],
+            ...filtered.map((s) => [s.code, s.name, s.city, s.region, s.zone, (store.getEmployee(s.managerId) || {}).name || '—', s.cm, s.bm, tplById[s.slabId]?.label || '—', staffBySite[s.id] || 0]),
           ])}><Icon name="download" className="w-3.5 h-3.5"/>Export</Btn>
-          <Btn variant="primary" onClick={() => setEditing({ id: null, code: '', name: '', type: 'store', lat: 19.108, lng: 72.826, radius: 150, shiftStart: '10:00', shiftEnd: '19:00', city: '', region: '', zone: '', bm: '', cm: '', slabId: hierarchy.defaultSlabId, incentives: [] })}><Icon name="plus" className="w-3.5 h-3.5"/>Add store</Btn>
+          <Btn variant="primary" onClick={() => setEditing({ id: null, code: '', name: '', type: 'store', lat: 19.108, lng: 72.826, radius: 150, shiftStart: '10:00', shiftEnd: '19:00', city: '', region: '', zone: '', bmId: '', teamLeadId: '', managerId: '', slabId: hierarchy.defaultSlabId, incentives: [] })}><Icon name="plus" className="w-3.5 h-3.5"/>Add store</Btn>
         </div>
       </div>
 
@@ -127,15 +200,21 @@ function SitesPage({ user }) {
             <option value="all">All zones</option>
             {(hierarchy.zones || []).map((z) => <option key={z} value={z}>{z}</option>)}
           </Select>
-          <Select value={region} onChange={(e) => { setRegion(e.target.value); setPage(0); }} className="!w-auto">
-            <option value="all">All regions</option>
+          <Select value={region} onChange={(e) => { setRegion(e.target.value); setTeamLead('all'); setPage(0); }} className="!w-auto">
+            <option value="all">All states</option>
             {regionsForZone.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
+          </Select>
+          <Select value={teamLead} onChange={(e) => { setTeamLead(e.target.value); setPage(0); }} className="!w-auto">
+            <option value="all">All Team Leads</option>
+            {teamLeadsInScope.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.storeCount})</option>)}
           </Select>
         </div>
         <table className="w-full dense-table text-[13px]">
-          <thead><tr><th>Store</th><th>City</th><th>Region / Zone</th><th>Business Mgr</th><th>Cluster Mgr</th><th>Incentive slab</th><th className="text-right">Staff</th><th></th></tr></thead>
+          <thead><tr><th>Store</th><th>City</th><th>State / Zone</th><th>Store Manager</th><th>Team Lead</th><th>Business Mgr</th><th>Incentive slab</th><th className="text-right">Staff</th><th></th></tr></thead>
           <tbody>
-            {shown.map((s) => (
+            {shown.map((s) => {
+              const mgr = s.managerId ? store.getEmployee(s.managerId) : null;
+              return (
               <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                 <td>
                   <div className="font-semibold text-slate-800 dark:text-slate-100">{s.name}</div>
@@ -143,14 +222,20 @@ function SitesPage({ user }) {
                 </td>
                 <td className="text-[12px] text-slate-600 dark:text-slate-300">{s.city}</td>
                 <td><div className="text-[12px] text-slate-700 dark:text-slate-200">{s.region}</div><div className="text-[10px] text-slate-400">{s.zone}</div></td>
-                <td className="text-[12px] text-slate-600 dark:text-slate-300">{s.bm || '—'}</td>
+                <td>
+                  {mgr
+                    ? <div className="flex items-center gap-1.5"><Avatar emp={mgr} size={20}/><span className="text-[12px] text-slate-700 dark:text-slate-200 truncate max-w-[110px]">{mgr.name}</span></div>
+                    : <span className="text-[11px] text-slate-400 italic">Unassigned</span>}
+                </td>
                 <td className="text-[12px] text-slate-600 dark:text-slate-300">{s.cm || '—'}</td>
+                <td className="text-[12px] text-slate-600 dark:text-slate-300">{s.bm || '—'}</td>
                 <td className="max-w-[180px]"><span className="text-[11px] text-slate-600 dark:text-slate-300 truncate block" title={tplById[s.slabId]?.raw}>{tplById[s.slabId]?.label || '—'}</span></td>
                 <td className="text-right"><Badge tone="brand">{staffBySite[s.id] || 0}</Badge></td>
                 <td><Btn size="xs" onClick={() => setEditing(s)}><Icon name="edit" className="w-3 h-3"/></Btn></td>
               </tr>
-            ))}
-            {shown.length === 0 && <tr><td colSpan={8}><Empty title="No stores match filters"/></td></tr>}
+              );
+            })}
+            {shown.length === 0 && <tr><td colSpan={9}><Empty title="No stores match filters"/></td></tr>}
           </tbody>
         </table>
         {pages > 1 && (
@@ -175,8 +260,37 @@ function SitesPage({ user }) {
             <Field label="Type"><Select value={editing.type} onChange={(e) => setEditing({ ...editing, type: e.target.value })}><option value="store">Retail store</option><option value="service-centre">Service centre</option></Select></Field>
             <Field label="Zone"><Select value={editing.zone || ''} onChange={(e) => setEditing({ ...editing, zone: e.target.value })}><option value="">—</option>{(hierarchy.zones || []).map((z) => <option key={z} value={z}>{z}</option>)}</Select></Field>
             <Field label="Region"><Select value={editing.region || ''} onChange={(e) => setEditing({ ...editing, region: e.target.value })}><option value="">—</option>{(hierarchy.regions || []).filter((r) => !editing.zone || r.zone === editing.zone).map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}</Select></Field>
-            <Field label="Business Manager"><Input value={editing.bm || ''} onChange={(e) => setEditing({ ...editing, bm: e.target.value })}/></Field>
-            <Field label="Cluster Manager"><Input value={editing.cm || ''} onChange={(e) => setEditing({ ...editing, cm: e.target.value })}/></Field>
+            <Field label="Store Manager" className="col-span-2"
+              hint={editing.id ? 'Picked from technicians posted to this store — they keep clocking in and being paid as field staff.' : 'Save the store first, then assign staff to it before naming a Store Manager.'}>
+              <Select value={editing.managerId || ''} disabled={!editing.id || storeStaff.length === 0}
+                onChange={(e) => setEditing({ ...editing, managerId: e.target.value })}>
+                <option value="">{storeStaff.length === 0 ? '— No staff posted to this store yet —' : '— Unassigned —'}</option>
+                {storeStaff.map((e) => <option key={e.id} value={e.id}>{e.name} · {e.code}</option>)}
+              </Select>
+            </Field>
+            <Field label="Team Lead" hint={`Covers multiple stores · ${teamLeadOptions.length} available${editing.zone || editing.region ? ' in scope' : ''}`}>
+              <Select value={editing.teamLeadId || ''} onChange={(e) => setEditing({ ...editing, teamLeadId: e.target.value })}>
+                <option value="">— Unassigned —</option>
+                {teamLeadOptions.map((m) => <option key={m.id} value={m.id}>{m.name}{m.region ? ` · ${m.region}` : ''} ({m.storeCount} stores)</option>)}
+              </Select>
+            </Field>
+            <Field label="Business Manager" hint={`Zone / multi-state owner · ${bmOptions.length} available${editing.zone ? ' in zone' : ''}`}>
+              <Select value={editing.bmId || ''} onChange={(e) => setEditing({ ...editing, bmId: e.target.value })}>
+                <option value="">— Unassigned —</option>
+                {bmOptions.map((m) => <option key={m.id} value={m.id}>{m.name}{m.zone ? ` · ${m.zone}` : ''} ({m.storeCount} stores)</option>)}
+              </Select>
+            </Field>
+            <div className="col-span-2 -mt-1 flex items-start gap-2 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+              <Icon name="users" className="w-4 h-4 text-slate-400 shrink-0 mt-px"/>
+              <div className="text-[11px] text-slate-600 dark:text-slate-300">
+                Reporting line for staff at this store:{' '}
+                <span className="font-semibold text-slate-800 dark:text-slate-100">
+                  Technician → {editing.managerId && store.getEmployee(editing.managerId) ? store.getEmployee(editing.managerId).name : 'Store Manager'}
+                  {' → '}{(store.getTeamLead(editing.teamLeadId) || {}).name || 'Team Lead'}
+                  {' → '}{(store.getBusinessManager(editing.bmId) || {}).name || 'Business Manager'}
+                </span>
+              </div>
+            </div>
             <Field label="Incentive slab" className="col-span-2">
               <Select value={editing.slabId || ''} onChange={(e) => setEditing({ ...editing, slabId: e.target.value })}>
                 <option value="">Company default</option>
@@ -244,4 +358,4 @@ function SiteMapPicker({ lat, lng, radius, onChange }) {
   return <div ref={ref} style={{ height: 260 }}/>;
 }
 
-Object.assign(window, { SitesPage, SiteMapPicker, IncentiveEditor });
+Object.assign(window, { SitesPage, SiteMapPicker, IncentiveEditor, incentiveRuleText });

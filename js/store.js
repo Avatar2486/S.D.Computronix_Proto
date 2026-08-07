@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  const LS_KEY = 'sdc_hrms_v3';           // bumped: schema change (real data + new modules)
+  const LS_KEY = 'sdc_hrms_v4';           // bumped: people hierarchy (manager ids on sites + store managers)
   const TODAY = new Date('2026-07-15T10:30:00+05:30'); // demo "today" (mid-month)
   const D = window.SDCData || { sites: [], employees: [], slabTemplates: [], zones: [], regions: [], businessManagers: [], clusterManagers: [], defaultSlabId: null, meta: {} };
 
@@ -187,10 +187,81 @@
       sites, employees, attendance, salesRecords,
       slabs, slabTemplates,
       regularisations, notifications, kudos, devEvents, devAbsences,
-      hierarchy: { zones: D.zones || [], regions: D.regions || [], businessManagers: D.businessManagers || [], clusterManagers: D.clusterManagers || [], defaultSlabId: D.defaultSlabId || null },
+      hierarchy: buildHierarchy(sites, employees),
       payrolls: [],
       incentiveUploads: [],
       config: { workingDays: 30, pfPct: 0.12, esicPct: 0.0075, pt: 200, defaultTravelAllowance: 1500 },
+    };
+  }
+
+  /* ---------- people hierarchy ----------
+     Four levels, matching how the client actually runs the field force:
+
+        Technician  →  Store Manager  →  Team Lead  →  Business Manager
+
+     Team Leads are the 52 "Cluster Managers" in the ZOB data (each covers ~11
+     stores); Business Managers are the 14 zone/state-level owners. Both are
+     REFERENCE DATA, not employees — they carry stable ids so stores and filters
+     can point at them, but they never enter field headcount or a payroll run.
+
+     Store Managers are different: they are real technicians who also run their
+     store, so `site.managerId` points at an employee id and that employee keeps
+     `role: 'field-employee'` (they still clock in, still get paid, still appear
+     in headcount) plus an `isStoreManager` flag. */
+
+  const slugId = (prefix, name) => prefix + '_' + String(name || '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+
+  function buildHierarchy(sites, employees) {
+    const bms = (D.businessManagers || []).map((m) => ({ ...m, id: slugId('bm', m.name), level: 'business-manager' }));
+    const tls = (D.clusterManagers || []).map((m) => ({ ...m, id: slugId('tl', m.name), level: 'team-lead' }));
+
+    // Any manager named on a store but missing from the master lists (the demo
+    // sites use invented names) still needs an id, or its store would be orphaned.
+    const bmByName = new Map(bms.map((m) => [m.name, m]));
+    const tlByName = new Map(tls.map((m) => [m.name, m]));
+    sites.forEach((s) => {
+      if (s.bm && !bmByName.has(s.bm)) {
+        const m = { id: slugId('bm', s.bm), name: s.bm, zone: s.zone, regions: [s.region], stores: 0, level: 'business-manager' };
+        bms.push(m); bmByName.set(s.bm, m);
+      }
+      if (s.cm && !tlByName.has(s.cm)) {
+        const m = { id: slugId('tl', s.cm), name: s.cm, zone: s.zone, region: s.region, stores: 0, level: 'team-lead' };
+        tls.push(m); tlByName.set(s.cm, m);
+      }
+    });
+
+    // Link each store to its Team Lead / Business Manager by id, and promote the
+    // longest-tenured technician at the store to Store Manager.
+    const staffBySite = {};
+    employees.forEach((e) => {
+      if (e.role !== 'field-employee' || e.status !== 'active') return;
+      (staffBySite[e.siteId] = staffBySite[e.siteId] || []).push(e);
+    });
+    sites.forEach((s) => {
+      s.bmId = s.bm ? (bmByName.get(s.bm) || {}).id || null : null;
+      s.teamLeadId = s.cm ? (tlByName.get(s.cm) || {}).id || null : null;
+      if (!s.managerId) {
+        const staff = staffBySite[s.id] || [];
+        // Earliest joiningDate wins; blank dates sort last so they are never picked over a dated peer.
+        const lead = staff.slice().sort((a, b) => String(a.joiningDate || '9999').localeCompare(String(b.joiningDate || '9999')))[0];
+        if (lead) { s.managerId = lead.id; lead.isStoreManager = true; }
+      }
+    });
+
+    // Recount stores per manager from the actual links rather than trusting the sheet.
+    const countBy = (key) => sites.reduce((m, s) => { if (s[key]) m[s[key]] = (m[s[key]] || 0) + 1; return m; }, {});
+    const bmCounts = countBy('bmId'), tlCounts = countBy('teamLeadId');
+    bms.forEach((m) => { m.storeCount = bmCounts[m.id] || 0; });
+    tls.forEach((m) => { m.storeCount = tlCounts[m.id] || 0; });
+
+    return {
+      zones: D.zones || [],
+      regions: D.regions || [],
+      businessManagers: bms,
+      clusterManagers: tls,   // kept under the old key so existing callers keep working
+      teamLeads: tls,
+      defaultSlabId: D.defaultSlabId || null,
     };
   }
 
@@ -240,6 +311,38 @@
   const getSlabTemplate = (id) => state.slabTemplates.find((t) => t.id === id) || null;
   const getSales = (empId, month) => { if (!salesIndex) buildIndexes(); return salesIndex[empId + '|' + month]; };
   const getHierarchy = () => state.hierarchy;
+
+  // ---------- hierarchy lookups ----------
+  const getTeamLeads = () => (state.hierarchy.teamLeads || state.hierarchy.clusterManagers || []);
+  const getBusinessManagers = () => (state.hierarchy.businessManagers || []);
+  const getTeamLead = (id) => getTeamLeads().find((m) => m.id === id) || null;
+  const getBusinessManager = (id) => getBusinessManagers().find((m) => m.id === id) || null;
+  const getStoreManager = (siteId) => { const s = getSite(siteId); return s && s.managerId ? getEmployee(s.managerId) : null; };
+  const getSitesForTeamLead = (id) => getSites().filter((s) => s.teamLeadId === id);
+  const getSitesForBusinessManager = (id) => getSites().filter((s) => s.bmId === id);
+
+  /* Full reporting line for one employee, top-down, skipping levels that do not
+     apply (a Store Manager does not report to themselves). */
+  function getReportingChain(empId) {
+    const emp = getEmployee(empId); if (!emp) return [];
+    const site = getSite(emp.siteId); if (!site) return [];
+    const chain = [];
+    const mgr = site.managerId ? getEmployee(site.managerId) : null;
+    if (mgr && mgr.id !== emp.id) chain.push({ level: 'store-manager', label: 'Store Manager', id: mgr.id, name: mgr.name, meta: site.name });
+    const tl = getTeamLead(site.teamLeadId);
+    if (tl) chain.push({ level: 'team-lead', label: 'Team Lead', id: tl.id, name: tl.name, meta: (tl.storeCount || 0) + ' stores' });
+    const bm = getBusinessManager(site.bmId);
+    if (bm) chain.push({ level: 'business-manager', label: 'Business Manager', id: bm.id, name: bm.name, meta: bm.zone ? bm.zone + ' zone' : '' });
+    return chain;
+  }
+
+  function setSiteManager(siteId, empId) {
+    const s = getSite(siteId); if (!s) return;
+    if (s.managerId) { const prev = getEmployee(s.managerId); if (prev) delete prev.isStoreManager; }
+    s.managerId = empId || null;
+    if (empId) { const e = getEmployee(empId); if (e) e.isStoreManager = true; }
+    invalidate(); persist(); emit();
+  }
   const getAttendance = (filter) => {
     let list = state.attendance;
     if (filter?.employeeId) list = list.filter((a) => a.employeeId === filter.employeeId);
@@ -274,14 +377,55 @@
     const raw = tier.type === 'pct' ? Math.round((sales * tier.value) / 100) : tier.value;
     return { payout: clamp(raw, 0, 20000), tier };
   }
+  /* Threshold incentive rules (employee- and store-level).
+
+     Unlike slab tiers — where only the highest tier you reach pays — these rules
+     are INDEPENDENT: every rule whose sales threshold is cleared pays out, and
+     they sum. So "10% once ₹50k is crossed" and "₹2,000 once ₹40k is crossed"
+     can both fire on the same month.
+
+     Rule shape: { id, minSales, type: 'pct'|'flat', value } */
+  const RULE_CAP = 20000;
+  function ruleAmount(rule, sales) {
+    const val = +rule.value || 0;
+    return rule.type === 'pct' ? Math.round((sales * val) / 100) : Math.round(val);
+  }
+  function evalIncentiveRules(rules, sales, scope) {
+    const applied = [], pending = [];
+    (rules || []).forEach((r) => {
+      if (!r || (!r.value && r.value !== 0)) return;
+      const minSales = +r.minSales || 0;
+      if (sales >= minSales) applied.push({ ...r, scope, minSales, amount: ruleAmount(r, sales) });
+      else pending.push({ ...r, scope, minSales, amount: ruleAmount(r, minSales), remaining: minSales - sales });
+    });
+    return { total: applied.reduce((n, r) => n + r.amount, 0), applied, pending };
+  }
+
   // calcIncentive(sales, emp?) — emp makes it store-specific; without emp, legacy global.
   function calcIncentive(sales, emp) {
     if (emp) {
       const { template } = resolveSlab(emp);
-      if (template) {
-        if (template.kind === 'none' || !template.tiers?.length) return { payout: 0, slab: { id: template.id, label: template.label || 'No incentive' }, template };
-        const { payout } = payoutFromTiers(template.tiers, sales);
-        return { payout, slab: { id: template.id, label: template.label }, template };
+      const site = getSite(emp.siteId);
+      const empRules  = evalIncentiveRules(emp.incentives, sales, 'employee');
+      const siteRules = evalIncentiveRules(site && site.incentives, sales, 'store');
+      const rules = {
+        total: empRules.total + siteRules.total,
+        applied: empRules.applied.concat(siteRules.applied),
+        pending: empRules.pending.concat(siteRules.pending),
+      };
+      const hasTemplate = template && template.kind !== 'none' && template.tiers && template.tiers.length;
+      const slabPayout = hasTemplate ? payoutFromTiers(template.tiers, sales).payout : 0;
+
+      if (template || rules.applied.length || rules.pending.length) {
+        const raw = slabPayout + rules.total;
+        const label = template ? (template.label || 'No incentive') : 'Threshold rules';
+        return {
+          payout: clamp(raw, 0, RULE_CAP),
+          slab: { id: template ? template.id : null, label },
+          template: template || null,
+          breakdown: { slab: slabPayout, rules: rules.total, applied: rules.applied, pending: rules.pending },
+          capped: raw > RULE_CAP,
+        };
       }
     }
     // legacy global bands
@@ -299,6 +443,24 @@
     const sales = getSales(emp.id, month)?.totalSales || 0;
     const { source, template } = resolveSlab(emp);
     const fmtAmt = (n) => (n >= 100000 ? '₹' + (n / 100000).toFixed(n % 100000 ? 1 : 0) + 'L' : n >= 1000 ? '₹' + Math.round(n / 1000) + 'k' : '₹' + n);
+
+    /* Independent threshold rules ride alongside whichever branch runs below,
+       so the mobile app can show "unlocked" and "still locked" rules. */
+    const full = calcIncentive(sales, emp);
+    const bd = full.breakdown || { rules: 0, applied: [], pending: [] };
+    const decorate = (r) => ({
+      ...r,
+      minLabel: fmtAmt(r.minSales),
+      amountLabel: fmtAmt(r.amount),
+      typeLabel: r.type === 'pct' ? r.value + '% of sales' : fmtAmt(+r.value || 0) + ' flat',
+      remainingLabel: r.remaining != null ? fmtAmt(r.remaining) : null,
+    });
+    const rules = {
+      total: bd.rules,
+      applied: (bd.applied || []).map(decorate),
+      pending: (bd.pending || []).map(decorate),
+    };
+
     if (template && template.kind !== 'none' && template.tiers?.length) {
       const sorted = [...template.tiers].sort((a, b) => a.from - b.from);
       let current = null, next = null;
@@ -311,11 +473,12 @@
         payoutText: t.type === 'pct' ? t.value + '% of sales' : fmtAmt(t.value),
         reached: sales >= t.from, active: current && t.from === current.from,
       }));
-      const { payout } = payoutFromTiers(template.tiers, sales);
+      const slabPayout = payoutFromTiers(template.tiers, sales).payout;
       const base = current ? current.from : 0;
       const span = next ? next.from - base : Math.max(1, sales - base);
       return {
-        mode: 'template', source, raw: template.raw, label: template.label, sales, payout,
+        mode: 'template', source, raw: template.raw, label: template.label, sales,
+        payout: full.payout, slabPayout, rules, capped: full.capped,
         tiers, next: next ? { fromLabel: fmtAmt(next.from), remaining: Math.max(0, next.from - sales), payoutText: next.type === 'pct' ? next.value + '%' : fmtAmt(next.value) } : null,
         progress: Math.max(0, Math.min(100, ((sales - base) / span) * 100)),
       };
@@ -329,7 +492,8 @@
     const base = inc.slab.minSales || 0;
     const span = next ? next.minSales - base : Math.max(1, sales - base);
     return {
-      mode: 'global', source: 'global', raw: 'Company default bands', label: inc.slab.label, sales, payout: inc.payout, tiers,
+      mode: 'global', source: 'global', raw: 'Company default bands', label: inc.slab.label, sales,
+      payout: full.payout, slabPayout: inc.payout, rules, capped: full.capped, tiers,
       next: next ? { fromLabel: fmtAmt(next.minSales), remaining: Math.max(0, next.minSales - sales), payoutText: fmtAmt(next.payout) } : null,
       progress: Math.max(0, Math.min(100, ((sales - base) / span) * 100)),
     };
@@ -393,14 +557,16 @@
     const esic = Math.round(state.config.esicPct * emp.baseSalary);
     const pt = state.config.pt;
     const sales = getSales(empId, month)?.totalSales || 0;
-    const { payout: incentive, slab } = calcIncentive(sales, emp);
+    const incResult = calcIncentive(sales, emp);
+    const incentive = incResult.payout;
     const travelAllowance = emp.travelEligible ? (emp.travelAmount || state.config.defaultTravelAllowance) : 0;
     const netPay = emp.baseSalary - absenceDeduction - (pf + esic + pt) + incentive + travelAllowance;
     return {
       employeeId: empId, month, workingDays, presentDays, absentDays,
       base: emp.baseSalary, absenceDeduction,
       statutory: { pf, esic, pt, total: pf + esic + pt },
-      sales, incentive, incentiveSlab: slab, travelAllowance,
+      sales, incentive, incentiveSlab: incResult.slab, travelAllowance,
+      incentiveBreakdown: incResult.breakdown || null, incentiveCapped: !!incResult.capped,
       netPay,
     };
   }
@@ -519,8 +685,15 @@
   function assignEmployeeSlab(empId, tplId) { const e = getEmployee(empId); if (e) { e.slabId = tplId || null; persist(); emit(); } }
 
   function upsertSite(site) {
-    if (site.id && state.sites.some((s) => s.id === site.id)) { const i = state.sites.findIndex((s) => s.id === site.id); state.sites[i] = site; }
-    else state.sites.push({ ...site, id: site.id || uid('site') });
+    // Manager ids are the source of truth; keep the legacy name fields in step so
+    // the store table, search and CSV export keep showing readable names.
+    const tl = getTeamLead(site.teamLeadId);
+    const bm = getBusinessManager(site.bmId);
+    const next = { ...site, cm: tl ? tl.name : (site.teamLeadId ? site.cm : ''), bm: bm ? bm.name : (site.bmId ? site.bm : '') };
+    if (next.managerId) { const e = getEmployee(next.managerId); if (e) e.isStoreManager = true; }
+
+    if (next.id && state.sites.some((s) => s.id === next.id)) { const i = state.sites.findIndex((s) => s.id === next.id); state.sites[i] = next; }
+    else state.sites.push({ ...next, id: next.id || uid('site') });
     invalidate(); persist(); emit();
   }
   function deleteSite(id) { state.sites = state.sites.filter((s) => s.id !== id); invalidate(); persist(); emit(); }
@@ -635,9 +808,13 @@
     getSales, getAttendance, getRegularisations, getNotifications, getPayrollRun, getLivePositions,
     getHierarchy, getKudos, getDevEvents, isDevAbsent, getTargets, incentiveDetail, resolveSlab, isPresentToday,
     getEmployeeIncentives, getSiteIncentives, getIncentiveUploads, findEmployeeByPhone,
+    // hierarchy
+    getTeamLeads, getBusinessManagers, getTeamLead, getBusinessManager, getStoreManager,
+    getSitesForTeamLead, getSitesForBusinessManager, getReportingChain, setSiteManager,
     get state() { return state; },
     // logic
     calcIncentive, computePayslip, runPayroll, countAttendance, checkGeofence, haversine,
+    evalIncentiveRules, ruleAmount, RULE_CAP,
     // mutations
     updateEmployee, addEmployee, approveEmployee, rejectEmployee, addAttendance,
     addRegularisation, decideRegularisation, upsertSlab, deleteSlab,

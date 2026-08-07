@@ -139,6 +139,44 @@ function EmployeeDetailDrawer({ emp: empProp, onClose }) {
             </div>
           )}
 
+          {/* Reporting line — Technician → Store Manager → Team Lead → Business Manager */}
+          <Card title="Reporting line" bodyClass="p-3"
+            right={emp.isStoreManager ? <Badge tone="violet">Store Manager</Badge> : <Badge tone="slate">Technician</Badge>}>
+            <div className="space-y-0">
+              <div className="flex gap-2.5">
+                <div className="flex flex-col items-center">
+                  <Avatar emp={emp} size={22}/>
+                  <div className="w-px flex-1 min-h-[14px] bg-slate-200 dark:bg-slate-700"/>
+                </div>
+                <div className="pb-2.5 min-w-0">
+                  <div className="text-[12px] font-semibold text-slate-800 dark:text-slate-100">{emp.name}</div>
+                  <div className="text-[10px] text-slate-500">{emp.isStoreManager ? 'Store Manager' : 'Technician'} · {site ? site.name : 'Unassigned'}</div>
+                </div>
+              </div>
+              {store.getReportingChain(emp.id).map((node, i, arr) => (
+                <div key={node.level} className="flex gap-2.5">
+                  <div className="flex flex-col items-center">
+                    <div className={`w-[22px] h-[22px] rounded-full flex items-center justify-center shrink-0 ${
+                      node.level === 'store-manager' ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300'
+                      : node.level === 'team-lead' ? 'bg-brand-100 text-brand-700 dark:bg-brand-900/40 dark:text-brand-300'
+                      : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+                    }`}>
+                      <Icon name={node.level === 'business-manager' ? 'building' : 'user'} className="w-3 h-3"/>
+                    </div>
+                    {i < arr.length - 1 && <div className="w-px flex-1 min-h-[14px] bg-slate-200 dark:bg-slate-700"/>}
+                  </div>
+                  <div className="pb-2.5 min-w-0">
+                    <div className="text-[12px] font-semibold text-slate-800 dark:text-slate-100 truncate">{node.name}</div>
+                    <div className="text-[10px] text-slate-500">{node.label}{node.meta ? ' · ' + node.meta : ''}</div>
+                  </div>
+                </div>
+              ))}
+              {store.getReportingChain(emp.id).length === 0 && (
+                <div className="text-[11px] text-slate-400 italic pl-8">No reporting line — this employee has no store assigned.</div>
+              )}
+            </div>
+          </Card>
+
           <Card title="July snapshot" bodyClass="p-3">
             <div className="grid grid-cols-3 gap-2">
               <div className="p-2 rounded bg-slate-50 dark:bg-slate-800/50">
@@ -220,28 +258,119 @@ function EmployeeDetailDrawer({ emp: empProp, onClose }) {
 }
 
 
+/* ---- Filter popover: keeps six rarely-changed filters off the main bar ---- */
+function FilterPopover({ count, onClear, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen(!open)}
+        className={`h-8 px-2.5 inline-flex items-center gap-1.5 rounded-md border text-[12px] font-semibold transition ${
+          count > 0
+            ? 'border-brand-500 bg-brand-50 text-brand-800 dark:bg-brand-900/30 dark:text-brand-200 dark:border-brand-600'
+            : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
+        }`}>
+        <Icon name="sliders" className="w-3.5 h-3.5"/>Filters
+        {count > 0 && <span className="ml-0.5 min-w-[16px] h-4 px-1 rounded-full bg-brand-700 text-white text-[10px] font-bold flex items-center justify-center">{count}</span>}
+        <Icon name={open ? 'chevron-up' : 'chevron-down'} className="w-3 h-3"/>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)}/>
+          <div className="absolute right-0 top-9 z-30 w-[320px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-pop p-3 space-y-2.5 anim-in">
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Refine by</div>
+              {count > 0 && <button onClick={onClear} className="text-[11px] font-semibold text-rose-600 hover:underline">Clear all</button>}
+            </div>
+            {children}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function EmployeesPage({ user }) {
   const store = useStore();
   const [q, setQ] = useState('');
-  const [zoneFilter, setZoneFilter] = useState('all');
-  const [regionFilter, setRegionFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
   const [selected, setSelected] = useState(null);
   const [openWizard, setOpenWizard] = useState(false);
   const [page, setPage] = useState(0);
   const isSiteMgr = user.role === 'site-manager';
   const hierarchy = store.getHierarchy();
 
+  const BLANK = { zone: 'all', region: 'all', city: 'all', siteId: 'all', teamLead: 'all', bm: 'all', level: 'all', status: 'all' };
+  const [f, setF] = useState(BLANK);
+  /* Clearing an upstream filter must clear everything downstream of it, or the
+     list silently keeps a narrower scope than the chips suggest. */
+  const setFilter = (patch) => {
+    setF((prev) => {
+      const next = { ...prev, ...patch };
+      if (patch.zone !== undefined) Object.assign(next, { region: 'all', city: 'all', siteId: 'all', teamLead: 'all' });
+      if (patch.region !== undefined) Object.assign(next, { city: 'all', siteId: 'all', teamLead: 'all' });
+      if (patch.city !== undefined) Object.assign(next, { siteId: 'all' });
+      if (patch.teamLead !== undefined) Object.assign(next, { siteId: 'all' });
+      return next;
+    });
+    setPage(0);
+  };
+
+  const allSites = store.getSites();
+  const siteById = useMemo(() => Object.fromEntries(allSites.map((s) => [s.id, s])), [store.state]);
+
+  /* Cascading option lists — each level is derived from the sites still in scope,
+     so you can never pick a combination that yields zero results. */
+  const sitesInScope = useMemo(() => allSites.filter((s) =>
+    (f.zone === 'all' || s.zone === f.zone) &&
+    (f.region === 'all' || s.region === f.region) &&
+    (f.city === 'all' || s.city === f.city) &&
+    (f.teamLead === 'all' || s.teamLeadId === f.teamLead) &&
+    (f.bm === 'all' || s.bmId === f.bm)
+  ), [f.zone, f.region, f.city, f.teamLead, f.bm, store.state]);
+
+  const regionOpts = useMemo(() => [...new Set(allSites.filter((s) => f.zone === 'all' || s.zone === f.zone).map((s) => s.region).filter(Boolean))].sort(), [f.zone, store.state]);
+  const cityOpts = useMemo(() => [...new Set(allSites.filter((s) => (f.zone === 'all' || s.zone === f.zone) && (f.region === 'all' || s.region === f.region)).map((s) => s.city).filter(Boolean))].sort(), [f.zone, f.region, store.state]);
+  const storeOpts = useMemo(() => sitesInScope.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')), [sitesInScope]);
+  const teamLeadOpts = useMemo(() => store.getTeamLeads().filter((m) =>
+    (f.zone === 'all' || m.zone === f.zone) && (f.region === 'all' || m.region === f.region)), [f.zone, f.region, store.state]);
+  const bmOpts = useMemo(() => store.getBusinessManagers().filter((m) => f.zone === 'all' || m.zone === f.zone), [f.zone, store.state]);
+
   let list = store.getEmployees();
   if (isSiteMgr) list = list.filter((e) => e.siteId === user.siteId);
-  if (zoneFilter !== 'all') list = list.filter((e) => store.getSite(e.siteId)?.zone === zoneFilter);
-  if (regionFilter !== 'all') list = list.filter((e) => store.getSite(e.siteId)?.region === regionFilter);
-  if (statusFilter !== 'all') list = list.filter((e) => e.status === statusFilter);
-  if (q) list = list.filter((e) => e.name.toLowerCase().includes(q.toLowerCase()) || e.code.toLowerCase().includes(q.toLowerCase()));
+  if (f.status !== 'all') list = list.filter((e) => e.status === f.status);
+  if (f.level === 'store-manager') list = list.filter((e) => !!e.isStoreManager);
+  if (f.level === 'technician') list = list.filter((e) => e.role === 'field-employee' && !e.isStoreManager);
+  if (f.siteId !== 'all') list = list.filter((e) => e.siteId === f.siteId);
+  else if (f.zone !== 'all' || f.region !== 'all' || f.city !== 'all' || f.teamLead !== 'all' || f.bm !== 'all') {
+    const ids = new Set(sitesInScope.map((s) => s.id));
+    list = list.filter((e) => ids.has(e.siteId));
+  }
+  if (q) {
+    const ql = q.trim().toLowerCase();
+    const qDigits = ql.replace(/\D/g, '');
+    list = list.filter((e) => {
+      const site = siteById[e.siteId];
+      return (e.name || '').toLowerCase().includes(ql)
+        || (e.code || '').toLowerCase().includes(ql)
+        || (e.email || '').toLowerCase().includes(ql)
+        || (qDigits.length >= 4 && (e.phone || '').replace(/\D/g, '').includes(qDigits))
+        || (site && ((site.name || '').toLowerCase().includes(ql) || (site.city || '').toLowerCase().includes(ql)));
+    });
+  }
   const PER = 25;
   const pages = Math.ceil(list.length / PER) || 1;
   const pageList = list.slice(page * PER, page * PER + PER);
-  const regionsForZone = (hierarchy.regions || []).filter((r) => zoneFilter === 'all' || r.zone === zoneFilter);
+
+  /* Removable chips — one per active filter, so the current scope is always visible. */
+  const chips = [];
+  if (f.zone !== 'all')     chips.push({ k: 'zone',     label: 'Zone: ' + f.zone,   clear: () => setFilter({ zone: 'all' }) });
+  if (f.region !== 'all')   chips.push({ k: 'region',   label: 'State: ' + f.region, clear: () => setFilter({ region: 'all' }) });
+  if (f.city !== 'all')     chips.push({ k: 'city',     label: 'City: ' + f.city,   clear: () => setFilter({ city: 'all' }) });
+  if (f.siteId !== 'all')   chips.push({ k: 'site',     label: 'Store: ' + ((siteById[f.siteId] || {}).name || f.siteId), clear: () => setFilter({ siteId: 'all' }) });
+  if (f.teamLead !== 'all') chips.push({ k: 'tl',       label: 'Team Lead: ' + ((store.getTeamLead(f.teamLead) || {}).name || ''), clear: () => setFilter({ teamLead: 'all' }) });
+  if (f.bm !== 'all')       chips.push({ k: 'bm',       label: 'Business Mgr: ' + ((store.getBusinessManager(f.bm) || {}).name || ''), clear: () => setFilter({ bm: 'all' }) });
+  if (f.level !== 'all')    chips.push({ k: 'level',    label: 'Level: ' + (f.level === 'store-manager' ? 'Store Manager' : 'Technician'), clear: () => setFilter({ level: 'all' }) });
+  if (f.status !== 'all')   chips.push({ k: 'status',   label: 'Status: ' + f.status, clear: () => setFilter({ status: 'all' }) });
+  const popoverCount = ['zone', 'region', 'city', 'siteId', 'teamLead', 'bm'].filter((k) => f[k] !== 'all').length;
 
   return (
     <div className="space-y-4">
@@ -254,60 +383,129 @@ function EmployeesPage({ user }) {
         <div className="flex items-center gap-2">
           {!isSiteMgr && <Btn variant="primary" onClick={() => setOpenWizard(true)}><Icon name="plus" className="w-3.5 h-3.5"/>Add employee</Btn>}
           <Btn onClick={() => downloadCSV('employees.csv', [
-            ['Code','Name','Phone','Email','Site','Status','Aadhaar','PAN','Base'],
-            ...list.map((e) => [e.code, e.name, e.phone, e.email, store.getSite(e.siteId)?.name || '', e.status, e.aadhaarMasked, e.panMasked, e.baseSalary]),
+            ['Code','Name','Level','Phone','Email','Store','City','State','Zone','Store Manager','Team Lead','Business Manager','Status','Aadhaar','PAN','Base'],
+            ...list.map((e) => {
+              const s = siteById[e.siteId] || {};
+              const mgr = s.managerId ? store.getEmployee(s.managerId) : null;
+              return [e.code, e.name, e.isStoreManager ? 'Store Manager' : 'Technician', e.phone, e.email,
+                s.name || '', s.city || '', s.region || '', s.zone || '',
+                mgr ? mgr.name : '', s.cm || '', s.bm || '',
+                e.status, e.aadhaarMasked, e.panMasked, e.baseSalary];
+            }),
           ])}><Icon name="download" className="w-3.5 h-3.5"/>Export CSV</Btn>
         </div>
       </div>
 
       <Card noBody>
-        <div className="flex flex-wrap items-center gap-2 p-3 border-b border-slate-200 dark:border-slate-800">
-          <div className="flex items-center gap-1.5 flex-1 min-w-[220px] h-8 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
-            <Icon name="search" className="w-3.5 h-3.5 text-slate-400"/>
-            <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search by name or code…" className="flex-1 bg-transparent text-[13px] outline-none dark:text-slate-100"/>
+        <div className="p-3 border-b border-slate-200 dark:border-slate-800 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-1 min-w-[240px] h-8 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
+              <Icon name="search" className="w-3.5 h-3.5 text-slate-400"/>
+              <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search name, code, email, phone or store…" className="flex-1 bg-transparent text-[13px] outline-none dark:text-slate-100"/>
+              {q && <button onClick={() => { setQ(''); setPage(0); }} className="text-slate-400 hover:text-slate-600"><Icon name="x" className="w-3.5 h-3.5"/></button>}
+            </div>
+
+            {/* Level — segmented, because it is the filter people flip most often */}
+            <div className="inline-flex rounded-md border border-slate-200 dark:border-slate-700 overflow-hidden shrink-0">
+              {[['all', 'All'], ['technician', 'Technicians'], ['store-manager', 'Store Managers']].map(([v, label]) => (
+                <button key={v} onClick={() => setFilter({ level: v })}
+                  className={`h-8 px-2.5 text-[12px] font-semibold transition border-r last:border-r-0 border-slate-200 dark:border-slate-700 ${
+                    f.level === v ? 'bg-brand-700 text-white' : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}>{label}</button>
+              ))}
+            </div>
+
+            <Select value={f.status} onChange={(e) => setFilter({ status: e.target.value })} className="!w-auto">
+              <option value="all">All statuses</option>
+              <option value="active">Active</option>
+              <option value="pending">Pending</option>
+              <option value="inactive">Inactive</option>
+              <option value="rejected">Rejected</option>
+            </Select>
+
+            {!isSiteMgr && (
+              <FilterPopover count={popoverCount} onClear={() => { setF({ ...BLANK, level: f.level, status: f.status }); setPage(0); }}>
+                <Field label="Zone">
+                  <Select value={f.zone} onChange={(e) => setFilter({ zone: e.target.value })}>
+                    <option value="all">All zones</option>
+                    {(hierarchy.zones || []).map((z) => <option key={z} value={z}>{z}</option>)}
+                  </Select>
+                </Field>
+                <Field label="State">
+                  <Select value={f.region} onChange={(e) => setFilter({ region: e.target.value })}>
+                    <option value="all">All states{f.zone !== 'all' ? ` in ${f.zone}` : ''}</option>
+                    {regionOpts.map((r) => <option key={r} value={r}>{r}</option>)}
+                  </Select>
+                </Field>
+                <Field label="City">
+                  <Select value={f.city} onChange={(e) => setFilter({ city: e.target.value })}>
+                    <option value="all">All cities ({cityOpts.length})</option>
+                    {cityOpts.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Team Lead">
+                  <Select value={f.teamLead} onChange={(e) => setFilter({ teamLead: e.target.value })}>
+                    <option value="all">All Team Leads ({teamLeadOpts.length})</option>
+                    {teamLeadOpts.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.storeCount} stores)</option>)}
+                  </Select>
+                </Field>
+                <Field label="Business Manager">
+                  <Select value={f.bm} onChange={(e) => setFilter({ bm: e.target.value })}>
+                    <option value="all">All Business Managers ({bmOpts.length})</option>
+                    {bmOpts.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Store" hint={`${storeOpts.length} store${storeOpts.length !== 1 ? 's' : ''} in current scope`}>
+                  <Select value={f.siteId} onChange={(e) => setFilter({ siteId: e.target.value })}>
+                    <option value="all">All stores</option>
+                    {storeOpts.map((s) => <option key={s.id} value={s.id}>{s.name} · {s.city}</option>)}
+                  </Select>
+                </Field>
+              </FilterPopover>
+            )}
           </div>
-          {!isSiteMgr && (
-            <Select value={zoneFilter} onChange={(e) => { setZoneFilter(e.target.value); setRegionFilter('all'); setPage(0); }} className="!w-auto">
-              <option value="all">All zones</option>
-              {(hierarchy.zones || []).map((z) => <option key={z} value={z}>{z}</option>)}
-            </Select>
+
+          {/* Active filter chips */}
+          {chips.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {chips.map((c) => (
+                <button key={c.k} onClick={c.clear}
+                  className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full bg-brand-50 dark:bg-brand-900/30 border border-brand-200 dark:border-brand-800 text-[11px] font-semibold text-brand-800 dark:text-brand-200 hover:bg-brand-100 dark:hover:bg-brand-900/50 transition">
+                  {c.label}<Icon name="x" className="w-3 h-3"/>
+                </button>
+              ))}
+              <button onClick={() => { setF(BLANK); setQ(''); setPage(0); }} className="text-[11px] font-semibold text-slate-500 hover:text-rose-600 underline ml-1">Clear all</button>
+            </div>
           )}
-          {!isSiteMgr && (
-            <Select value={regionFilter} onChange={(e) => { setRegionFilter(e.target.value); setPage(0); }} className="!w-auto">
-              <option value="all">All regions</option>
-              {regionsForZone.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
-            </Select>
-          )}
-          <Select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }} className="!w-auto">
-            <option value="all">All statuses</option>
-            <option value="active">Active</option>
-            <option value="pending">Pending</option>
-            <option value="inactive">Inactive</option>
-            <option value="rejected">Rejected</option>
-          </Select>
         </div>
         <table className="w-full dense-table text-[13px]">
           <thead>
             <tr>
-              <th>Employee</th><th>Code</th><th>Site</th><th>Aadhaar</th><th>PAN</th><th>Bank</th><th>Status</th><th>Salary</th><th></th>
+              <th>Employee</th><th>Code</th><th>Store</th><th>Team Lead</th><th>Aadhaar</th><th>PAN</th><th>Bank</th><th>Status</th><th>Salary</th><th></th>
             </tr>
           </thead>
           <tbody>
             {pageList.map((e) => {
-              const site = store.getSite(e.siteId);
+              const site = siteById[e.siteId];
               return (
                 <tr key={e.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer" onClick={() => setSelected(e)}>
                   <td>
                     <div className="flex items-center gap-2.5">
                       <Avatar emp={e} size={30}/>
-                      <div>
-                        <div className="font-semibold text-slate-800 dark:text-slate-100">{e.name}</div>
-                        <div className="text-[11px] text-slate-500">{e.email}</div>
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                          <span className="truncate">{e.name}</span>
+                          {e.isStoreManager && <Badge tone="violet">Store Mgr</Badge>}
+                        </div>
+                        <div className="text-[11px] text-slate-500 truncate">{e.email}</div>
                       </div>
                     </div>
                   </td>
                   <td className="font-mono text-[12px] text-slate-600 dark:text-slate-300">{e.code}</td>
-                  <td>{site ? <div><div className="text-[12px] text-slate-700 dark:text-slate-200">{site.city}</div><div className="text-[10px] text-slate-500">{site.type}</div></div> : '—'}</td>
+                  <td>{site
+                    ? <div className="max-w-[170px]"><div className="text-[12px] text-slate-700 dark:text-slate-200 truncate">{site.name}</div><div className="text-[10px] text-slate-500">{site.city} · {site.region}</div></div>
+                    : <span className="text-slate-400">—</span>}</td>
+                  <td className="text-[12px] text-slate-600 dark:text-slate-300 max-w-[130px] truncate">{site && site.cm ? site.cm : '—'}</td>
                   <td className="font-mono text-[11px] text-slate-500">{e.aadhaarMasked}</td>
                   <td className="font-mono text-[11px] text-slate-500">{e.panMasked}</td>
                   <td>{e.bankVerified ? <Badge tone="green"><Icon name="check" className="w-3 h-3"/>Verified</Badge> : <Badge tone="slate">—</Badge>}</td>
@@ -322,7 +520,7 @@ function EmployeesPage({ user }) {
                 </tr>
               );
             })}
-            {list.length === 0 && <tr><td colSpan={9}><Empty title="No employees match filters"/></td></tr>}
+            {list.length === 0 && <tr><td colSpan={10}><Empty title="No employees match filters" hint="Try clearing a filter chip above."/></td></tr>}
           </tbody>
         </table>
         {pages > 1 && (
@@ -343,4 +541,4 @@ function EmployeesPage({ user }) {
   );
 }
 
-Object.assign(window, { EmployeesPage, EmployeeDetailDrawer });
+Object.assign(window, { EmployeesPage, EmployeeDetailDrawer, FilterPopover });

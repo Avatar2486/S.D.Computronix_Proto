@@ -32,6 +32,38 @@ function MobileProfile({ emp: empProp, onLogout, onTour, onOpenDocs }) {
           <div className="text-[13px] font-bold text-emerald-700 dark:text-emerald-400">{fmtINR(detail.payout)}</div>
         </div>
         <div className="text-[10px] text-slate-500 mb-2">{site?.name} · <span className="font-semibold text-slate-600 dark:text-slate-300">{detail.raw || detail.label}</span></div>
+        {/* Independent threshold rules — these pay on top of the slab */}
+        {detail.rules && (detail.rules.applied.length > 0 || detail.rules.pending.length > 0) && (
+          <div className="mb-2 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+            <div className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+              <span className="text-[9px] uppercase font-bold tracking-wide text-slate-500">Extra incentive rules</span>
+              {detail.rules.total > 0 && <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400">+{fmtINR(detail.rules.total)}</span>}
+            </div>
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+              {detail.rules.applied.map((r, i) => (
+                <div key={'a' + i} className="px-2.5 py-1.5 flex items-center gap-2">
+                  <Icon name="check-circle" className="w-3.5 h-3.5 text-emerald-600 shrink-0"/>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11px] font-semibold text-slate-800 dark:text-white">{r.typeLabel}</div>
+                    <div className="text-[9px] text-slate-500">Unlocked · crossed {r.minLabel}</div>
+                  </div>
+                  <div className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400">{fmtINR(r.amount)}</div>
+                </div>
+              ))}
+              {detail.rules.pending.map((r, i) => (
+                <div key={'p' + i} className="px-2.5 py-1.5 flex items-center gap-2 opacity-70">
+                  <Icon name="target" className="w-3.5 h-3.5 text-slate-400 shrink-0"/>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">{r.typeLabel}</div>
+                    <div className="text-[9px] text-slate-500">{r.remainingLabel} more sales to unlock {r.minLabel}</div>
+                  </div>
+                  <div className="text-[11px] font-semibold text-slate-400">{r.amountLabel}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="space-y-2">
           {detail.tiers.length === 0 && <div className="text-[11px] text-slate-400">This store has no incentive slab configured.</div>}
           {detail.tiers.map((t, i) => (

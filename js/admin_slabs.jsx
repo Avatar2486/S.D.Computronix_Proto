@@ -12,6 +12,12 @@ function fmtIncentiveValue(row) {
   if (!row) return '—';
   return row.type === 'pct' ? row.value + '%' : fmtINR(+row.value);
 }
+/* Threshold a rule must clear before it pays; 0 / blank means "from rupee one". */
+function fmtIncentiveThreshold(row) {
+  if (!row) return '—';
+  const min = +row.minSales || 0;
+  return min > 0 ? fmtINR(min) : 'No minimum';
+}
 
 /* ---- Slab template editor (kept for advanced/compat) ---- */
 function tierText(t) {
@@ -188,11 +194,12 @@ function SlabsPage({ user }) {
 
   /* ---- CSV sample download ---- */
   const downloadSample = () => downloadCSV('incentive_upload_sample.csv', [
-    ['Employee ID', 'Employee Name', 'Location', 'Incentive Type', 'Incentive Value'],
-    ['SDC001', 'Rahul Verma', 'Mumbai', 'Percentage', '10'],
-    ['SDC001', 'Rahul Verma', 'Mumbai', 'Fixed Amount', '2000'],
-    ['SDC002', 'Priya Nair', 'Mumbai', 'Percentage', '8'],
-    ['SDC003', 'Amit Sharma', 'Delhi', 'Fixed Amount', '1500'],
+    ['Employee ID', 'Employee Name', 'Location', 'Minimum Sales', 'Incentive Type', 'Incentive Value'],
+    // Same employee, two independent rules — both pay if both thresholds are cleared.
+    ['SDC001', 'Rahul Verma', 'Mumbai', '50000', 'Percentage', '10'],
+    ['SDC001', 'Rahul Verma', 'Mumbai', '40000', 'Fixed Amount', '2000'],
+    ['SDC002', 'Priya Nair', 'Mumbai', '60000', 'Percentage', '8'],
+    ['SDC003', 'Amit Sharma', 'Delhi', '0', 'Fixed Amount', '1500'],
   ]);
 
   /* ---- Parse & process uploaded CSV ---- */
@@ -204,6 +211,9 @@ function SlabsPage({ user }) {
     const empNameCol = header.findIndex((h) => h.includes('employee name'));
     const typeCol = header.findIndex((h) => h.includes('incentive type') || h === 'type');
     const valueCol = header.findIndex((h) => h.includes('incentive value') || h === 'value');
+    // Optional so older files without a threshold column still import (they
+    // simply get minSales = 0, i.e. "pays from the first rupee").
+    const minCol = header.findIndex((h) => h.includes('minimum sales') || h.includes('min sales') || h.includes('sales from') || h === 'threshold');
 
     if (empIdCol < 0 || typeCol < 0 || valueCol < 0) {
       toast('Invalid CSV format — required columns: Employee ID, Incentive Type, Incentive Value', 'error');
@@ -234,8 +244,14 @@ function SlabsPage({ user }) {
       const numVal = parseFloat(val);
       if (isNaN(numVal) || numVal < 0) { errors.push({ row: i + 1, empId: empCode, empName: emp.name, reason: 'Invalid Incentive Value — must be a positive number' }); continue; }
 
+      let minSales = 0;
+      if (minCol >= 0 && cols[minCol] !== undefined && cols[minCol] !== '') {
+        minSales = parseFloat(String(cols[minCol]).replace(/[₹,\s]/g, ''));
+        if (isNaN(minSales) || minSales < 0) { errors.push({ row: i + 1, empId: empCode, empName: emp.name, reason: 'Invalid Minimum Sales — must be 0 or a positive number' }); continue; }
+      }
+
       if (!byEmp[emp.id]) byEmp[emp.id] = { emp, incentives: [] };
-      byEmp[emp.id].incentives.push({ id: 'inc_' + Math.random().toString(36).slice(2, 8), type, value: numVal });
+      byEmp[emp.id].incentives.push({ id: 'inc_' + Math.random().toString(36).slice(2, 8), minSales, type, value: numVal });
       success++;
     }
 
@@ -323,8 +339,8 @@ function SlabsPage({ user }) {
               <option value="none">No incentive</option>
             </select>
             <Btn size="xs" onClick={() => downloadCSV('employee_incentives.csv', [
-              ['Employee ID', 'Employee Name', 'Location', 'Incentive Type', 'Incentive Value'],
-              ...allRows.filter((r) => r.incentive).map((r) => [r.emp.code, r.emp.name, r.site?.city || '—', fmtIncentiveType(r.incentive.type), r.incentive.value]),
+              ['Employee ID', 'Employee Name', 'Location', 'Minimum Sales', 'Incentive Type', 'Incentive Value'],
+              ...allRows.filter((r) => r.incentive).map((r) => [r.emp.code, r.emp.name, r.site?.city || '—', +r.incentive.minSales || 0, fmtIncentiveType(r.incentive.type), r.incentive.value]),
             ])}><Icon name="download" className="w-3 h-3"/>Export</Btn>
           </div>
           <table className="w-full dense-table text-[13px]">
@@ -333,6 +349,7 @@ function SlabsPage({ user }) {
                 <th>Employee</th>
                 <th>Employee ID</th>
                 <th>Location</th>
+                <th>Applies From</th>
                 <th>Incentive Type</th>
                 <th>Incentive Value</th>
                 <th></th>
@@ -358,6 +375,13 @@ function SlabsPage({ user }) {
                   </td>
                   <td>
                     {r.incentive ? (
+                      +r.incentive.minSales > 0
+                        ? <span className="text-[12px] font-semibold text-slate-700 dark:text-slate-200">{fmtINR(+r.incentive.minSales)}</span>
+                        : <span className="text-[11px] text-slate-400">No minimum</span>
+                    ) : '—'}
+                  </td>
+                  <td>
+                    {r.incentive ? (
                       <Badge tone={r.incentive.type === 'pct' ? 'brand' : 'violet'}>
                         {r.incentive.type === 'pct' ? 'Percentage (%)' : 'Fixed Amount (₹)'}
                       </Badge>
@@ -373,7 +397,7 @@ function SlabsPage({ user }) {
                   </td>
                 </tr>
               ))}
-              {shown.length === 0 && <tr><td colSpan={6}><Empty title="No employees match filters"/></td></tr>}
+              {shown.length === 0 && <tr><td colSpan={7}><Empty title="No employees match filters"/></td></tr>}
             </tbody>
           </table>
           {pages > 1 && (
@@ -403,15 +427,22 @@ function SlabsPage({ user }) {
                       <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Required CSV Columns</div>
                     </div>
                     <div className="p-3">
-                      <div className="grid grid-cols-5 gap-1">
-                        {['Employee ID', 'Employee Name', 'Location', 'Incentive Type', 'Incentive Value'].map((col) => (
+                      <div className="grid grid-cols-3 md:grid-cols-6 gap-1">
+                        {['Employee ID', 'Employee Name', 'Location', 'Minimum Sales', 'Incentive Type', 'Incentive Value'].map((col) => (
                           <div key={col} className="text-[11px] font-semibold text-brand-700 dark:text-brand-300 bg-brand-50 dark:bg-brand-900/20 rounded px-2 py-1 text-center">{col}</div>
                         ))}
                       </div>
-                      <div className="mt-2 text-[11px] text-slate-500">
-                        <span className="font-semibold">Incentive Type</span>: "Percentage" or "Fixed Amount" &nbsp;·&nbsp;
-                        <span className="font-semibold">Incentive Value</span>: numeric (e.g. 10 for 10%) &nbsp;·&nbsp;
-                        The same employee can appear in multiple rows to define multiple incentives.
+                      <div className="mt-2 text-[11px] text-slate-500 space-y-1">
+                        <div>
+                          <span className="font-semibold">Minimum Sales</span>: the monthly sales that must be crossed before this rule pays — use <span className="font-mono">0</span> for no minimum &nbsp;·&nbsp;
+                          <span className="font-semibold">Incentive Type</span>: "Percentage" or "Fixed Amount" &nbsp;·&nbsp;
+                          <span className="font-semibold">Incentive Value</span>: numeric (e.g. 10 for 10%)
+                        </div>
+                        <div>
+                          The same employee can appear in multiple rows to define multiple incentives. Rules are
+                          <span className="font-semibold"> independent</span> — e.g. "₹50,000 → 10%" and "₹40,000 → ₹2,000"
+                          both pay once their thresholds are cleared.
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -466,6 +497,7 @@ function SlabsPage({ user }) {
                     ['file', 'CSV format only', 'Use the sample template to ensure correct column ordering.'],
                     ['users', 'Employee matching', 'Employees are matched by Employee ID (e.g. SDC001). Unrecognised IDs are skipped with an error.'],
                     ['trending-up', 'Multiple incentives', 'A single employee can appear in multiple rows — each row adds one incentive rule.'],
+                    ['target', 'Independent thresholds', 'Every rule that clears its Minimum Sales pays out, and the amounts add up. Rules do not override one another.'],
                     ['refresh', 'Full replace', 'Uploading for an employee replaces all their existing incentive definitions.'],
                     ['shield', 'Admin only', 'Only Admin and Super Admin can perform bulk uploads.'],
                   ].map(([icon, title, desc]) => (
@@ -597,4 +629,4 @@ function SlabsPage({ user }) {
   );
 }
 
-Object.assign(window, { SlabsPage, SlabTemplateEditor });
+Object.assign(window, { SlabsPage, SlabTemplateEditor, UploadErrorModal, EmpIncentiveEditModal, fmtIncentiveThreshold });
