@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>S.D. Computronix — Field Force HRMS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<script src="https://cdn.tailwindcss.com/3.4.16"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['"Plus Jakarta Sans"', 'ui-sans-serif', 'system-ui'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+        },
+        colors: {
+          brand: {
+            50:  '#EEF2FF',
+            100: '#E0E7FF',
+            200: '#C7D2FE',
+            300: '#A5B4FC',
+            400: '#818CF8',
+            500: '#4F63E6',
+            600: '#3B4FD9',
+            700: '#1E40AF',
+            800: '#1E3A8A',
+            900: '#172554',
+          },
+        },
+        boxShadow: {
+          'card': '0 1px 2px 0 rgb(15 23 42 / 0.04), 0 1px 3px 0 rgb(15 23 42 / 0.06)',
+          'pop':  '0 10px 30px -12px rgb(15 23 42 / 0.25)',
+        },
+      },
+    },
+  };
+</script>
+<style>
+  html, body { background: #F1F3F8; }
+  html.dark, html.dark body { background: #0B0F1A; }
+  body { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; -webkit-font-smoothing: antialiased; color: #0F172A; font-size: 13px; line-height: 1.45; }
+  .dark body { color: #E2E8F0; }
+
+  /* Compact enterprise density */
+  .dense-table th, .dense-table td { padding: 8px 12px; border-bottom: 1px solid #E5E7EB; }
+  .dark .dense-table th, .dark .dense-table td { border-color: #1E293B; }
+  .dense-table th { text-align: left; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #64748B; background: #F8FAFC; }
+  .dark .dense-table th { background: #0F172A; color: #94A3B8; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  .dark ::-webkit-scrollbar-thumb { background: #334155; }
+
+  /* Leaflet dark tweaks */
+  .leaflet-container { font-family: inherit; background: #E5E9F0; }
+  .dark .leaflet-container { background: #0F172A; }
+  .dark .leaflet-tile { filter: brightness(0.7) invert(1) contrast(0.85) hue-rotate(200deg) saturate(0.4) brightness(0.85); }
+  .leaflet-popup-content-wrapper { border-radius: 8px; }
+
+  /* Phone frame shadow */
+  .phone-shadow { box-shadow: 0 30px 60px -20px rgba(15,23,42,0.35), 0 0 0 1px rgba(15,23,42,0.06); }
+
+  /* Fade in */
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .anim-in { animation: fadeIn 200ms ease-out both; }
+
+  /* Pulse dot */
+  @keyframes pulse-dot { 0%,100% { box-shadow: 0 0 0 0 rgba(16,185,129,0.6); } 50% { box-shadow: 0 0 0 6px rgba(16,185,129,0); } }
+  .pulse-dot { animation: pulse-dot 1.6s ease-out infinite; }
+
+  /* Print — payslip */
+  @media print {
+    body * { visibility: hidden; }
+    .print-area, .print-area * { visibility: visible; }
+    .print-area { position: absolute; left: 0; top: 0; width: 100%; padding: 24px; background: white !important; color: black !important; }
+    .no-print { display: none !important; }
+  }
+
+  /* Range slider brand */
+  input[type=range] { accent-color: #1E40AF; }
+
+  /* Hide leaflet attribution on tiny maps */
+  .leaflet-tiny .leaflet-control-attribution { display: none; }
+
+  /* Tour spotlight */
+  .tour-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,0.55); z-index: 90; pointer-events: auto; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="js/data.js"></script>
+  <script src="js/store.js"></script>
+  <script type="text/babel" src="js/utils.jsx"></script>
+  <script type="text/babel" src="js/auth.jsx"></script>
+  <script type="text/babel" src="js/onboarding.jsx"></script>
+  <script type="text/babel" src="js/extras.jsx"></script>
+  <script type="text/babel" src="js/tour.jsx"></script>
+  <script type="text/babel" src="js/admin_overview.jsx"></script>
+  <script type="text/babel" src="js/admin_employees.jsx"></script>
+  <script type="text/babel" src="js/admin_approvals.jsx"></script>
+  <script type="text/babel" src="js/admin_livemap.jsx"></script>
+  <script type="text/babel" src="js/admin_regularisation.jsx"></script>
+  <script type="text/babel" src="js/admin_payroll.jsx"></script>
+  <script type="text/babel" src="js/admin_slabs.jsx"></script>
+  <script type="text/babel" src="js/admin_sites.jsx"></script>
+  <script type="text/babel" src="js/admin_reports.jsx"></script>
+  <script type="text/babel" src="js/mobile_documents.jsx"></script>
+  <script type="text/babel" src="js/mobile_auth.jsx"></script>
+  <script type="text/babel" src="js/mobile_onboarding.jsx"></script>
+  <script type="text/babel" src="js/mobile_frame.jsx"></script>
+  <script type="text/babel" src="js/mobile_home.jsx"></script>
+  <script type="text/babel" src="js/mobile_attendance.jsx"></script>
+  <script type="text/babel" src="js/mobile_history.jsx"></script>
+  <script type="text/babel" src="js/mobile_payslips.jsx"></script>
+  <script type="text/babel" src="js/mobile_incentives.jsx"></script>
+  <script type="text/babel" src="js/mobile_profile.jsx"></script>
+  <script type="text/babel" src="js/shell.jsx"></script>
+  <script type="text/babel" src="js/app.jsx"></script>
+</body>
+</html>

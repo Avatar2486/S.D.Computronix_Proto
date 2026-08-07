@@ -1,0 +1,18 @@
+{
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      ".firebaserc",
+      "**/.*",
+      "**/node_modules/**",
+      "serve.js",
+      "START-HRMS.bat",
+      "index.html.srcmap.json",
+      "Files/**",
+      "scripts_extract.py",
+      "**/*.md",
+      "skills-lock.json"
+    ]
+  }
+}
