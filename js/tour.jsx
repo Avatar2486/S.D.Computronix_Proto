@@ -7,10 +7,11 @@
 const ADMIN_TOUR_STEPS = [
   { icon: 'sparkle', title: 'Welcome to S.D. Computronix HRMS', body: 'A purpose-built field-force platform. This quick tour will walk you through the product, opening each screen as we go.', target: '[data-tour="brand"]', placement: 'bottom' },
   { icon: 'monitor', title: 'Web · Split · Mobile views', body: 'Use this switcher any time to flip the whole workspace between the web dashboard, a side-by-side split, and the employee mobile app.', target: '[data-tour="viewswitch"]', placement: 'bottom' },
-  { icon: 'home', title: 'Command Center', body: 'Live KPIs update from real data — present today, out-of-fence alerts, payroll and incentive cost. Vikram is outside his fence right now.', target: '[data-tour="nav-overview"]', nav: 'overview', placement: 'right' },
-  { icon: 'map', title: 'Live Field Map', body: 'Every field employee plotted with their site geo-fence. Red markers are outside the fence — click a marker to see their photo, coordinates and time.', target: '[data-tour="nav-livemap"]', nav: 'livemap', placement: 'right' },
-  { icon: 'wallet', title: 'Payroll with real math', body: 'Open Payroll and run June — Priya’s 2 absent days automatically become a ₹1,000 deduction. Every figure is computed, never hard-coded.', target: '[data-tour="nav-payroll"]', nav: 'payroll', placement: 'right' },
-  { icon: 'trending-up', title: 'Incentive slabs', body: 'Edit any slab payout here and watch every employee’s incentive recompute instantly across payslips and reports.', target: '[data-tour="nav-slabs"]', nav: 'slabs', placement: 'right' },
+  { icon: 'home', title: 'Command Center', body: 'Priority alerts sit at the top, so anything needing a decision is the first thing you see. Every KPI below is computed from live data.', target: '[data-tour="nav-overview"]', nav: 'overview', placement: 'right' },
+  { icon: 'users', title: 'One place for people', body: 'Employees holds the whole lifecycle — Existing staff, New joiners, and the Onboarding queue — as tabs. There is no separate "register" screen to hunt for.', target: '[data-tour="nav-employees"]', nav: 'employees', placement: 'right' },
+  { icon: 'calendar', title: 'Attendance, end to end', body: 'Overview, Daily, Monthly and Regularization all live here. Approve a correction and the affected payslip recomputes on the spot.', target: '[data-tour="nav-attendance"]', nav: 'attendance', placement: 'right' },
+  { icon: 'wallet', title: 'Payroll with real math', body: 'Run June — Priya’s 2 absent days automatically become a ₹1,000 deduction. Travel allowance and incentive each get their own card below the run.', target: '[data-tour="nav-payroll"]', nav: 'payroll', placement: 'right' },
+  { icon: 'trending-up', title: 'Incentives', body: 'Store target versus incentive slab, side by side, with the higher of the two paid out. Change a target or a slab and every figure recomputes instantly.', target: '[data-tour="nav-incentives"]', nav: 'incentives', placement: 'right' },
   { icon: 'refresh', title: 'Reset anytime', body: 'Explored enough? Reset restores all demo data to its seed so you can present again from scratch.', target: '[data-tour="reset"]', placement: 'bottom' },
   { icon: 'phone', title: 'Open the employee app', body: 'Finally, click Split or Mobile up here to open the field employee’s phone app and clock in with a live photo — it appears on the map in real time.', target: '[data-tour="viewswitch"]', placement: 'bottom' },
 ];
@@ -18,8 +19,8 @@ const ADMIN_TOUR_STEPS = [
 // Mobile steps. `tab` = which bottom tab to switch to for the step.
 const MOBILE_TOUR_STEPS = [
   { icon: 'sparkle', title: 'Your field app', body: 'Welcome! This is your S.D. Computronix app for attendance, payslips and incentives. Let’s take a quick look.', tab: 'home' },
-  { icon: 'target',  title: 'Geo-fenced clock-in', body: 'This is the Attendance tab. You can only clock in with a live selfie when you are inside your assigned site’s geo-fence.', tab: 'attendance' },
-  { icon: 'clock',   title: '2-hour location checks', body: 'During your shift the app prompts a quick live-photo check every 2 hours; your location is recorded automatically each time.', tab: 'attendance' },
+  { icon: 'target',  title: 'Geo-fenced clock-in', body: 'This is the Attendance tab. Clock in with a live photo once you are inside your assigned store’s geo-fence — that is the only check you need to do.', tab: 'attendance' },
+  { icon: 'calendar', title: 'Missed a mark?', body: 'Use Regularise on the same tab to request a correction. Your Team Lead approves it and your payslip updates automatically.', tab: 'attendance' },
   { icon: 'wallet',  title: 'Payslips', body: 'The Payslips tab shows your salary breakdown — base pay, deductions and incentive — and you can download each one.', tab: 'payslips' },
   { icon: 'user',    title: 'Profile & sign out', body: 'Your KYC, documents and shift live in Profile — and you can replay this tour or sign out from there anytime.', tab: 'profile' },
 ];

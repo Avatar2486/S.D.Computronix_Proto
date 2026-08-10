@@ -25,9 +25,9 @@ function LoginScreen({ onEnter }) {
   const users = store.getUsers().concat(store.getEmployees({ status: 'active' }).slice(0, 2));
   const roles = [
     { role: 'super-admin', title: 'Super Admin', desc: 'Full system access, config, all payroll & reports.', user: store.getUsers().find(u => u.role === 'super-admin'), icon: 'shield', tone: 'from-brand-700 to-brand-900' },
-    { role: 'hr-manager', title: 'HR Manager', desc: 'Employees, KYC approvals, payroll, regularisation.', user: store.getUsers().find(u => u.role === 'hr-manager'), icon: 'users', tone: 'from-violet-600 to-violet-800' },
-    { role: 'site-manager', title: 'Site Manager', desc: 'Only your assigned site — live map, attendance, approvals.', user: store.getUsers().find(u => u.role === 'site-manager'), icon: 'building', tone: 'from-emerald-600 to-emerald-800' },
-    { role: 'field-employee', title: 'Field Employee', desc: 'Mobile app — clock-in, payslips, incentives.', user: store.getEmployee('emp_001'), icon: 'user', tone: 'from-amber-600 to-orange-700' },
+    { role: 'hr-manager', title: 'HR Manager', desc: 'Employees, onboarding, payroll, attendance — approvals go to Super Admin.', user: store.getUsers().find(u => u.role === 'hr-manager'), icon: 'users', tone: 'from-violet-600 to-violet-800' },
+    { role: 'site-manager', title: 'Team Lead', desc: 'Only your own store — attendance, incentives, appreciation.', user: store.getUsers().find(u => u.role === 'site-manager'), icon: 'building', tone: 'from-emerald-600 to-emerald-800' },
+    { role: 'field-employee', title: 'Employee', desc: 'Mobile app — clock-in, payslips, incentives.', user: store.getEmployee('emp_001'), icon: 'user', tone: 'from-amber-600 to-orange-700' },
   ];
 
   const doLogin = (user) => {
@@ -58,7 +58,7 @@ function LoginScreen({ onEnter }) {
               Fraud-resistant field-force operations, end to end.
             </h1>
             <p className="mt-4 text-[15px] text-slate-600 dark:text-slate-300 leading-relaxed">
-              Geo-fenced photo attendance, 2-hour location checks, live-map monitoring, digital KYC onboarding, and slab-based incentive payroll — tailored for Croma deployments and service centres across India.
+              Geo-fenced photo attendance, live-map monitoring, digital KYC onboarding, store-target and slab-based incentive payroll — tailored for Croma deployments and service centres across India.
             </p>
             <div className="mt-8 grid grid-cols-2 gap-4">
               {[

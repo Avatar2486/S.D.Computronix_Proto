@@ -53,27 +53,197 @@ function IndiaMapSVG({ sites, height = 320 }) {
   );
 }
 
+/* ============================================================================
+   Report filters
+
+   One filter model shared by every report tab, so a scope set on Attendance is
+   still in force when you switch to Payroll. Filters combine (they intersect),
+   each is clearable from its chip, and Reset returns the whole set to default.
+   ========================================================================== */
+const REPORT_BLANK = {
+  from: '2026-07-01', to: '2026-07-15',
+  empId: 'all', siteId: 'all', teamLead: 'all', zone: 'all',
+  designation: 'all', empType: 'all', status: 'active', client: 'all', city: 'all',
+};
+
+/* The date range picks the months a report covers. The demo dataset carries
+   June and July 2026, so a range is resolved to the months it overlaps. */
+function monthsInRange(from, to) {
+  const out = [];
+  const start = new Date(from), end = new Date(to);
+  if (isNaN(start) || isNaN(end) || start > end) return ['2026-07'];
+  const cur = new Date(start.getFullYear(), start.getMonth(), 1);
+  while (cur <= end && out.length < 24) {
+    out.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`);
+    cur.setMonth(cur.getMonth() + 1);
+  }
+  return out.filter((m) => m === '2026-06' || m === '2026-07').length
+    ? out.filter((m) => m === '2026-06' || m === '2026-07')
+    : ['2026-07'];
+}
+
+function ReportFilters({ f, set, reset, activeCount }) {
+  const store = useStore();
+  const hierarchy = store.getHierarchy();
+
+  const sitesInScope = useMemo(() => store.getSites().filter((s) =>
+    (f.zone === 'all' || s.zone === f.zone) &&
+    (f.city === 'all' || s.city === f.city) &&
+    (f.teamLead === 'all' || s.teamLeadId === f.teamLead) &&
+    (f.client === 'all' || s.type === f.client)
+  ), [store.state, f.zone, f.city, f.teamLead, f.client]);
+
+  const cities = useMemo(() => [...new Set(store.getSites()
+    .filter((s) => f.zone === 'all' || s.zone === f.zone).map((s) => s.city).filter(Boolean))].sort(),
+    [store.state, f.zone]);
+  const teamLeads = store.getTeamLeads().filter((m) => f.zone === 'all' || m.zone === f.zone);
+  const designations = useMemo(() => [...new Set(store.state.employees.map((e) => e.designation).filter(Boolean))].sort(), [store.state]);
+  const empOptions = useMemo(() => store.getEmployees().slice(0, 600)
+    .map((e) => ({ value: e.id, label: e.name, sub: `${e.code} · ${e.designation}`, keywords: e.code })), [store.state]);
+
+  return (
+    <FilterBar activeCount={activeCount} onReset={reset}
+      hint="Every chart, table and export below reflects these filters">
+      <Field label="From date">
+        <Input type="date" value={f.from} onChange={(e) => set({ from: e.target.value })}/>
+      </Field>
+      <Field label="To date" error={new Date(f.to) < new Date(f.from) ? 'End date is before the start date' : null}>
+        <Input type="date" value={f.to} onChange={(e) => set({ to: e.target.value })}/>
+      </Field>
+      <Field label="Employee">
+        <SearchSelect value={f.empId} onChange={(v) => set({ empId: v })}
+          options={[{ value: 'all', label: 'All employees' }, ...empOptions]}
+          searchPlaceholder="Search employee…" emptyLabel="No employee matches"/>
+      </Field>
+      <Field label="Store">
+        <SearchSelect value={f.siteId} onChange={(v) => set({ siteId: v })}
+          options={[{ value: 'all', label: `All stores (${sitesInScope.length})` },
+            ...sitesInScope.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+              .map((s) => ({ value: s.id, label: s.name, sub: [s.city, s.code].filter(Boolean).join(' · '), keywords: s.code }))]}
+          searchPlaceholder="Search store…" emptyLabel="No store matches"/>
+      </Field>
+      <Field label="Team Lead">
+        <SearchSelect value={f.teamLead} onChange={(v) => set({ teamLead: v, siteId: 'all' })}
+          options={[{ value: 'all', label: `All Team Leads (${teamLeads.length})` },
+            ...teamLeads.map((m) => ({ value: m.id, label: m.name, sub: `${m.storeCount} stores` }))]}
+          searchPlaceholder="Search Team Lead…" emptyLabel="No match"/>
+      </Field>
+      <Field label="Designation">
+        <SearchSelect value={f.designation} onChange={(v) => set({ designation: v })}
+          options={[{ value: 'all', label: 'All designations' }, ...designations.map((d) => ({ value: d, label: d }))]}
+          searchPlaceholder="Search designation…" emptyLabel="No match"/>
+      </Field>
+      <Field label="Employee type">
+        <Select value={f.empType} onChange={(e) => set({ empType: e.target.value })}>
+          <option value="all">All types</option>
+          <option value="field">Field / Store</option>
+          <option value="office">Office / Desktop</option>
+        </Select>
+      </Field>
+      <Field label="Status">
+        <Select value={f.status} onChange={(e) => set({ status: e.target.value })}>
+          <option value="all">All statuses</option>
+          <option value="active">Active</option>
+          <option value="pending">Pending</option>
+          <option value="inactive">Inactive</option>
+          <option value="rejected">Rejected</option>
+        </Select>
+      </Field>
+      <Field label="Client / site type">
+        <Select value={f.client} onChange={(e) => set({ client: e.target.value, siteId: 'all' })}>
+          <option value="all">All site types</option>
+          <option value="store">Retail store</option>
+          <option value="service-centre">Service centre</option>
+        </Select>
+      </Field>
+      <Field label="Zone">
+        <Select value={f.zone} onChange={(e) => set({ zone: e.target.value, city: 'all', siteId: 'all', teamLead: 'all' })}>
+          <option value="all">All zones</option>
+          {(hierarchy.zones || []).map((z) => <option key={z} value={z}>{z}</option>)}
+        </Select>
+      </Field>
+      <Field label="City / location">
+        <SearchSelect value={f.city} onChange={(v) => set({ city: v, siteId: 'all' })}
+          options={[{ value: 'all', label: `All cities (${cities.length})` }, ...cities.map((c) => ({ value: c, label: c }))]}
+          searchPlaceholder="Search city…" emptyLabel="No city matches"/>
+      </Field>
+    </FilterBar>
+  );
+}
+
 function ReportsPage({ user }) {
   const store = useStore();
   const [tab, setTab] = useState('attendance');
-  const july = '2026-07';
-  const payMonth = '2026-06'; // last completed month for payroll/incentive breakdowns
-  const emps = store.getEmployees({ status: 'active' });
+  const isSiteMgr = user.role === 'site-manager';
+  const [f, setF] = useState(REPORT_BLANK);
+  const set = (patch) => setF((p) => ({ ...p, ...patch }));
+  const reset = () => setF(REPORT_BLANK);
+  const activeCount = Object.keys(REPORT_BLANK).filter((k) => f[k] !== REPORT_BLANK[k]).length;
 
-  // Attendance daily counts July 1..15 — org-wide present count (deterministic ~87–95%)
-  const attSeries = [];
-  for (let d = 1; d <= 15; d++) {
-    const frac = 0.87 + ((d * 53) % 9) / 100;
-    attSeries.push({ label: String(d), value: Math.round(emps.length * frac) });
-  }
+  const months = useMemo(() => monthsInRange(f.from, f.to), [f.from, f.to]);
+  // Attendance/payroll figures are reported for the last month the range touches.
+  const month = months[months.length - 1];
 
-  // Payroll breakdown per employee
-  const payslips = emps.map((e) => store.computePayslip(e.id, payMonth));
+  /* One filtered population feeds every tab. */
+  const emps = useMemo(() => {
+    let list = store.state.employees.filter((e) => e.role === 'field-employee' || e.employeeType === 'office');
+    if (isSiteMgr) list = list.filter((e) => e.siteId === user.siteId);
+    if (f.status !== 'all') list = list.filter((e) => e.status === f.status);
+    if (f.empType !== 'all') list = list.filter((e) => (e.employeeType || 'field') === f.empType);
+    if (f.designation !== 'all') list = list.filter((e) => e.designation === f.designation);
+    if (f.empId !== 'all') list = list.filter((e) => e.id === f.empId);
+    if (f.siteId !== 'all') list = list.filter((e) => e.siteId === f.siteId);
+    else {
+      const scoped = store.getSites().filter((s) =>
+        (f.zone === 'all' || s.zone === f.zone) &&
+        (f.city === 'all' || s.city === f.city) &&
+        (f.teamLead === 'all' || s.teamLeadId === f.teamLead) &&
+        (f.client === 'all' || s.type === f.client));
+      if (f.zone !== 'all' || f.city !== 'all' || f.teamLead !== 'all' || f.client !== 'all') {
+        const ids = new Set(scoped.map((s) => s.id));
+        list = list.filter((e) => ids.has(e.siteId));
+      }
+    }
+    return list;
+  }, [store.state, f, isSiteMgr, user.siteId]);
+
+  const chips = [];
+  if (f.from !== REPORT_BLANK.from || f.to !== REPORT_BLANK.to)
+    chips.push({ k: 'date', label: `${fmtDate(f.from)} – ${fmtDate(f.to)}`, clear: () => set({ from: REPORT_BLANK.from, to: REPORT_BLANK.to }) });
+  if (f.empId !== 'all')       chips.push({ k: 'emp', label: 'Employee: ' + ((store.getEmployee(f.empId) || {}).name || ''), clear: () => set({ empId: 'all' }) });
+  if (f.siteId !== 'all')      chips.push({ k: 'site', label: 'Store: ' + ((store.getSite(f.siteId) || {}).name || ''), clear: () => set({ siteId: 'all' }) });
+  if (f.teamLead !== 'all')    chips.push({ k: 'tl', label: 'Team Lead: ' + ((store.getTeamLead(f.teamLead) || {}).name || ''), clear: () => set({ teamLead: 'all' }) });
+  if (f.zone !== 'all')        chips.push({ k: 'zone', label: 'Zone: ' + f.zone, clear: () => set({ zone: 'all' }) });
+  if (f.city !== 'all')        chips.push({ k: 'city', label: 'City: ' + f.city, clear: () => set({ city: 'all' }) });
+  if (f.designation !== 'all') chips.push({ k: 'desig', label: 'Designation: ' + f.designation, clear: () => set({ designation: 'all' }) });
+  if (f.empType !== 'all')     chips.push({ k: 'type', label: 'Type: ' + (f.empType === 'office' ? 'Office' : 'Field'), clear: () => set({ empType: 'all' }) });
+  if (f.status !== REPORT_BLANK.status) chips.push({ k: 'status', label: 'Status: ' + f.status, clear: () => set({ status: REPORT_BLANK.status }) });
+  if (f.client !== 'all')      chips.push({ k: 'client', label: 'Site type: ' + (f.client === 'store' ? 'Retail' : 'Service centre'), clear: () => set({ client: 'all' }) });
+
+  // ---- Attendance ----
+  const attRows = useMemo(() => emps.map((e) => ({ emp: e, ...store.countAttendance(e.id, month) })), [emps, month, store.state]);
+  const attTotalWorking = attRows.reduce((n, r) => n + r.workingDays, 0);
+  const attTotalPresent = attRows.reduce((n, r) => n + r.presentDays, 0);
+  const attSeries = useMemo(() => {
+    const out = [];
+    const lastDay = month === '2026-07' ? 15 : 30;
+    const rate = attTotalPresent / Math.max(1, attTotalWorking);
+    for (let d = 1; d <= lastDay; d++) {
+      // Deterministic daily wobble around the real monthly attendance rate.
+      const wobble = ((d * 53) % 9) / 200 - 0.02;
+      out.push({ label: String(d), value: Math.max(0, Math.round(emps.length * (rate + wobble))) });
+    }
+    return out;
+  }, [emps.length, month, attTotalPresent, attTotalWorking]);
+
+  // ---- Payroll ----
+  const payslips = useMemo(() => emps.map((e) => store.computePayslip(e.id, month)), [emps, month, store.state]);
   const totalNet = payslips.reduce((s, p) => s + p.netPay, 0);
   const totalDed = payslips.reduce((s, p) => s + p.absenceDeduction + p.statutory.pf + p.statutory.esic + p.statutory.pt, 0);
   const totalInc = payslips.reduce((s, p) => s + p.incentive, 0);
+  const totalTravel = payslips.reduce((s, p) => s + p.travelAllowance, 0);
 
-  // Incentive distribution by payout band (store-specific slabs → too many to chart individually)
+  // ---- Incentive ----
   const incBuckets = [
     { label: 'No incentive', test: (v) => v <= 0 },
     { label: '₹1 – ₹2,000',  test: (v) => v > 0 && v <= 2000 },
@@ -81,55 +251,90 @@ function ReportsPage({ user }) {
     { label: '₹4k+',         test: (v) => v > 4000 },
   ];
   const slabColors = ['#CBD5E1','#93C5FD','#3B82F6','#1E40AF'];
-  const empInc = emps.map((e) => store.calcIncentive(store.getSales(e.id, july)?.totalSales || 0, e).payout);
-  const slabDist = incBuckets.map((b, i) => ({ label: b.label, value: empInc.filter(b.test).length, color: slabColors[i % slabColors.length] }));
+  const incRows = useMemo(() => emps.map((e) => {
+    const s = store.getSales(e.id, month)?.totalSales || 0;
+    return { emp: e, sales: s, inc: store.calcIncentive(s, e, month) };
+  }), [emps, month, store.state]);
+  const slabDist = incBuckets.map((b, i) => ({ label: b.label, value: incRows.filter((r) => b.test(r.inc.payout)).length, color: slabColors[i % slabColors.length] }));
 
-  // Site deployment (562 stores → count via a map, show only staffed sites, most-deployed first)
+  // ---- Deployment ----
   const staffBySite = {};
-  emps.forEach((e) => { staffBySite[e.siteId] = (staffBySite[e.siteId] || 0) + 1; });
+  emps.forEach((e) => { if (e.siteId) staffBySite[e.siteId] = (staffBySite[e.siteId] || 0) + 1; });
   const sitesWithCount = store.getSites()
     .map((s) => ({ ...s, staffCount: staffBySite[s.id] || 0 }))
     .filter((s) => s.staffCount > 0)
     .sort((a, b) => b.staffCount - a.staffCount);
 
+  const TABS = [
+    { id: 'attendance', label: 'Attendance', icon: 'calendar' },
+    { id: 'payroll',    label: 'Payroll',    icon: 'wallet' },
+    { id: 'incentive',  label: 'Incentive',  icon: 'trending-up' },
+    { id: 'deployment', label: 'Deployment', icon: 'map' },
+  ];
+
+  const exportCurrent = () => {
+    if (tab === 'attendance') {
+      downloadCSV(`report_attendance_${month}.csv`, [
+        ['Code','Name','Designation','Type','Store','City','Working','Present','Absent','Attendance %'],
+        ...attRows.map((r) => [r.emp.code, r.emp.name, r.emp.designation, r.emp.employeeType,
+          store.getSite(r.emp.siteId)?.name || '', store.getSite(r.emp.siteId)?.city || '',
+          r.workingDays, r.presentDays, r.absentDays, pctOf(r.presentDays, r.workingDays)]),
+      ]);
+    } else if (tab === 'payroll') {
+      downloadCSV(`report_payroll_${month}.csv`, [
+        ['Code','Name','Store','Base','Absence deduction','PF','ESIC','PT','Incentive','Travel','Net pay'],
+        ...payslips.map((p) => {
+          const e = store.getEmployee(p.employeeId);
+          return [e.code, e.name, store.getSite(e.siteId)?.name || '', p.base, p.absenceDeduction,
+            p.statutory.pf, p.statutory.esic, p.statutory.pt, p.incentive, p.travelAllowance, p.netPay];
+        }),
+      ]);
+    } else if (tab === 'incentive') {
+      downloadCSV(`report_incentive_${month}.csv`, [
+        ['Code','Name','Store','Sales','Basis','Slab / target','Maximum eligible','Incentive'],
+        ...incRows.map((r) => [r.emp.code, r.emp.name, store.getSite(r.emp.siteId)?.name || '', r.sales,
+          r.inc.winner === 'target' ? 'Store target' : 'Incentive slab', r.inc.slab.label,
+          r.inc.maxEligible || r.inc.payout, r.inc.payout]),
+      ]);
+    } else {
+      downloadCSV('report_deployment.csv', [
+        ['Code','Store','City','State','Zone','Team Lead','Business Manager','Staff'],
+        ...sitesWithCount.map((s) => [s.code, s.name, s.city, s.region, s.zone, s.cm, s.bm, s.staffCount]),
+      ]);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex items-end justify-between flex-wrap gap-3">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Analytics</div>
-          <div className="text-xl font-bold text-slate-900 dark:text-white">Reports & insights</div>
-          <div className="text-[12px] text-slate-500 mt-0.5">Filter, chart, and export operational metrics.</div>
-        </div>
-        <Btn><Icon name="download" className="w-3.5 h-3.5"/>Export PDF</Btn>
-      </div>
+      <PageHeader eyebrow="Analytics" title="Reports & insights"
+        subtitle={`Reporting on ${emps.length} employees · ${fmtDate(f.from)} – ${fmtDate(f.to)} (${fmtMonth(month)} figures)`}>
+        <Btn onClick={exportCurrent}><Icon name="download" className="w-3.5 h-3.5"/>Export this report</Btn>
+      </PageHeader>
 
-      <div className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-800">
-        {[
-          { id: 'attendance', label: 'Attendance', icon: 'calendar' },
-          { id: 'payroll',    label: 'Payroll',    icon: 'wallet' },
-          { id: 'incentive',  label: 'Incentive',  icon: 'trending-up' },
-          { id: 'deployment', label: 'Deployment', icon: 'map' },
-        ].map((t) => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`px-3 py-2 text-[12px] font-semibold border-b-2 -mb-px flex items-center gap-1.5 ${tab === t.id ? 'text-brand-700 border-brand-700 dark:text-brand-300 dark:border-brand-400' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>
-            <Icon name={t.icon} className="w-3.5 h-3.5"/>{t.label}
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={TABS} value={tab} onChange={setTab}/>
 
-      {tab === 'attendance' && (
+      <ReportFilters f={f} set={set} reset={reset} activeCount={activeCount}/>
+      <FilterChips chips={chips} onClearAll={reset}/>
+
+      {emps.length === 0 && (
+        <Card><Empty icon="search" title="No employees match these filters" hint="Widen the scope or reset the filters to see data."/></Card>
+      )}
+
+      {emps.length > 0 && tab === 'attendance' && (
         <div className="grid grid-cols-12 gap-4">
           <div className="col-span-12 lg:col-span-8">
-            <Card title="Daily attendance · July 1–15" subtitle="Unique employees clocked in per day">
+            <Card title={`Daily attendance · ${fmtMonth(month)}`} subtitle="Employees clocked in per day, within the current filters">
               <LineChart series={attSeries} height={220}/>
             </Card>
           </div>
           <div className="col-span-12 lg:col-span-4">
             <Card title="Attendance summary">
               {[
-                ['Avg presence', `${(attSeries.reduce((s,d) => s+d.value,0)/attSeries.length).toFixed(1)} / ${emps.length}`],
-                ['Perfect attendance', emps.filter((e) => store.computePayslip(e.id, payMonth).absentDays === 0).length + ' employees'],
-                ['2-hr checks today', store.getAttendance({ date: '2026-07-15' }).filter((a) => a.type === '2hr-check').length],
+                ['Employees in scope', emps.length],
+                ['Attendance rate', `${pctOf(attTotalPresent, attTotalWorking)}%`],
+                ['Perfect attendance', attRows.filter((r) => r.absentDays === 0).length + ' employees'],
+                ['Below 80%', attRows.filter((r) => r.presentDays / r.workingDays < 0.8).length + ' employees'],
+                ['Geo-fence exempt', emps.filter((e) => !e.geoFenceEnabled).length + ' employees'],
                 ['Geo-fence breaches', store.getLivePositions().filter((p) => !p.inside).length],
               ].map(([k, v]) => (
                 <div key={k} className="flex justify-between py-2 border-b border-slate-100 dark:border-slate-800 last:border-0 text-[13px]">
@@ -139,60 +344,64 @@ function ReportsPage({ user }) {
             </Card>
           </div>
           <div className="col-span-12">
-            <Card title="Per-employee attendance · July" bodyClass="p-0">
-              <table className="w-full dense-table">
-                <thead><tr><th>Employee</th><th>Site</th><th>Working</th><th>Present</th><th>Absent</th><th>Attendance %</th></tr></thead>
-                <tbody>
-                  {payslips.slice(0, 80).map((p) => {
-                    const e = store.getEmployee(p.employeeId);
-                    const pct = (p.presentDays / p.workingDays) * 100;
-                    return (
-                      <tr key={p.employeeId}>
-                        <td><div className="flex items-center gap-2"><Avatar emp={e} size={24}/>{e.name}</div></td>
-                        <td className="text-[11px] text-slate-500">{store.getSite(e.siteId)?.city}</td>
-                        <td className="font-mono">{p.workingDays}</td>
-                        <td className="font-mono text-emerald-700">{p.presentDays}</td>
-                        <td className="font-mono text-rose-700">{p.absentDays}</td>
-                        <td>
-                          <div className="flex items-center gap-2">
-                            <div className="w-32 h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                              <div className="h-full bg-brand-600" style={{ width: `${pct}%` }}/>
+            <Card title={`Per-employee attendance · ${fmtMonth(month)}`} bodyClass="p-0" noBody>
+              <div className="overflow-x-auto">
+                <table className="w-full dense-table text-[12.5px]">
+                  <thead><tr><th>Employee</th><th>Designation</th><th>Store</th><th className="text-right">Working</th><th className="text-right">Present</th><th className="text-right">Absent</th><th>Attendance %</th></tr></thead>
+                  <tbody>
+                    {attRows.slice(0, 80).map((r) => {
+                      const pct = pctOf(r.presentDays, r.workingDays);
+                      return (
+                        <tr key={r.emp.id}>
+                          <td><div className="flex items-center gap-2 min-w-0"><Avatar emp={r.emp} size={24}/><span className="truncate font-semibold">{r.emp.name}</span></div></td>
+                          <td className="text-[11.5px] text-slate-600 dark:text-slate-300 truncate max-w-[130px]">{r.emp.designation}</td>
+                          <td className="text-[11px] text-slate-500 truncate max-w-[160px]">{store.getSite(r.emp.siteId)?.name || '—'}</td>
+                          <td className="text-right font-mono">{r.workingDays}</td>
+                          <td className="text-right font-mono text-emerald-700 dark:text-emerald-400">{r.presentDays}</td>
+                          <td className="text-right font-mono text-rose-700 dark:text-rose-400">{r.absentDays || '—'}</td>
+                          <td>
+                            <div className="flex items-center gap-2">
+                              <ProgressBar value={pct} className="w-24 sm:w-32"/>
+                              <span className="text-[11px] font-mono font-semibold">{pct}%</span>
                             </div>
-                            <span className="text-[11px] font-mono font-semibold">{pct.toFixed(0)}%</span>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {payslips.length > 80 && <div className="p-2 text-center text-[11px] text-slate-500">Showing first 80 of {payslips.length} employees · export for the full list</div>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {attRows.length > 80 && <div className="p-2 text-center text-[11px] text-slate-500">Showing first 80 of {attRows.length} employees · export for the full list</div>}
             </Card>
           </div>
         </div>
       )}
 
-      {tab === 'payroll' && (
+      {emps.length > 0 && tab === 'payroll' && (
         <div className="grid grid-cols-12 gap-4">
-          <div className="col-span-12 md:col-span-4"><StatCard label="Total net payout" value={fmtINR(totalNet)} tone="brand" icon="wallet"/></div>
-          <div className="col-span-12 md:col-span-4"><StatCard label="Total deductions" value={fmtINR(totalDed)} tone="red" icon="alert"/></div>
-          <div className="col-span-12 md:col-span-4"><StatCard label="Total incentives" value={fmtINR(totalInc)} tone="green" icon="trending-up"/></div>
+          <div className="col-span-12 md:col-span-3"><StatCard label="Total net payout" value={fmtINR(totalNet)} tone="brand" icon="wallet"/></div>
+          <div className="col-span-12 md:col-span-3"><StatCard label="Total deductions" value={fmtINR(totalDed)} tone="red" icon="alert"/></div>
+          <div className="col-span-12 md:col-span-3"><StatCard label="Total incentives" value={fmtINR(totalInc)} tone="green" icon="trending-up"/></div>
+          <div className="col-span-12 md:col-span-3"><StatCard label="Travel allowance" value={fmtINR(totalTravel)} tone="green" icon="pin"/></div>
           <div className="col-span-12 lg:col-span-7">
-            <Card title="Net pay by employee">
-              <BarChart data={payslips.map((p) => ({ label: store.getEmployee(p.employeeId).name.split(' ')[0].slice(0,4), value: p.netPay }))} height={220}/>
+            <Card title="Net pay by employee" subtitle={payslips.length > 40 ? 'Top 40 by net pay' : `${payslips.length} employees`}>
+              <BarChart height={220}
+                data={[...payslips].sort((a, b) => b.netPay - a.netPay).slice(0, 40)
+                  .map((p) => ({ label: store.getEmployee(p.employeeId).name.split(' ')[0].slice(0, 4), value: p.netPay }))}/>
             </Card>
           </div>
           <div className="col-span-12 lg:col-span-5">
-            <Card title="Cost breakdown">
+            <Card title="Cost breakdown" subtitle={fmtMonth(month)}>
               <div className="space-y-3">
                 {[
                   { l: 'Base salaries', v: payslips.reduce((s,p) => s+p.base,0), c: '#1E40AF' },
                   { l: 'Incentives',    v: totalInc, c: '#059669' },
+                  { l: 'Travel allowance', v: totalTravel, c: '#0EA5E9' },
                   { l: 'PF employer',   v: payslips.reduce((s,p) => s+p.statutory.pf,0), c: '#7C3AED' },
                   { l: 'ESIC',          v: payslips.reduce((s,p) => s+p.statutory.esic,0), c: '#EA580C' },
                   { l: 'Absence ded.',  v: payslips.reduce((s,p) => s+p.absenceDeduction,0), c: '#DC2626' },
                 ].map((r) => {
-                  const total = payslips.reduce((s,p) => s+p.base,0) + totalInc;
+                  const total = payslips.reduce((s,p) => s+p.base,0) + totalInc + totalTravel || 1;
                   return (
                     <div key={r.l}>
                       <div className="flex justify-between text-[12px] mb-1">
@@ -200,7 +409,7 @@ function ReportsPage({ user }) {
                         <span className="font-mono font-semibold">{fmtINR(r.v)}</span>
                       </div>
                       <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                        <div className="h-full rounded-full" style={{ width: `${(r.v/total)*100}%`, background: r.c }}/>
+                        <div className="h-full rounded-full" style={{ width: `${Math.min(100, (r.v/total)*100)}%`, background: r.c }}/>
                       </div>
                     </div>
                   );
@@ -211,53 +420,61 @@ function ReportsPage({ user }) {
         </div>
       )}
 
-      {tab === 'incentive' && (
+      {emps.length > 0 && tab === 'incentive' && (
         <div className="grid grid-cols-12 gap-4">
           <div className="col-span-12 lg:col-span-5">
-            <Card title="Slab distribution">
+            <Card title="Incentive distribution" subtitle={`${incRows.filter((r) => r.inc.payout > 0).length} of ${incRows.length} earning`}>
               <div className="flex items-center justify-center py-4">
                 <DonutChart data={slabDist} size={180}/>
               </div>
               <div className="space-y-1.5">
                 {slabDist.map((d) => (
                   <div key={d.label} className="flex items-center gap-2 text-[12px]">
-                    <span className="w-2.5 h-2.5 rounded-sm" style={{ background: d.color }}/>
+                    <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: d.color }}/>
                     <span className="flex-1 text-slate-600 dark:text-slate-300">{d.label}</span>
                     <span className="font-semibold text-slate-800 dark:text-slate-100">{d.value} employees</span>
                   </div>
                 ))}
               </div>
+              <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-1.5 text-[12px]">
+                <div className="flex justify-between"><span className="text-slate-500">Paid on store target</span><span className="font-semibold">{incRows.filter((r) => r.inc.winner === 'target' && r.inc.payout > 0).length}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Paid on incentive slab</span><span className="font-semibold">{incRows.filter((r) => r.inc.winner === 'slab' && r.inc.payout > 0).length}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Total payable</span><span className="font-bold text-emerald-700 dark:text-emerald-300">{fmtINR(incRows.reduce((n, r) => n + r.inc.payout, 0))}</span></div>
+              </div>
             </Card>
           </div>
           <div className="col-span-12 lg:col-span-7">
-            <Card title="Sales vs incentive earned" bodyClass="p-0">
-              <table className="w-full dense-table">
-                <thead><tr><th>Employee</th><th>Sales (Jul)</th><th>Slab</th><th className="text-right">Incentive</th></tr></thead>
-                <tbody>
-                  {emps.slice(0, 80).map((e) => {
-                    const s = store.getSales(e.id, july)?.totalSales || 0;
-                    const inc = store.calcIncentive(s, e);
-                    return (
-                      <tr key={e.id}>
-                        <td><div className="flex items-center gap-2"><Avatar emp={e} size={24}/>{e.name}</div></td>
-                        <td className="font-mono">{fmtINR(s)}</td>
-                        <td><Badge tone="brand">{inc.slab.label}</Badge></td>
-                        <td className="text-right font-mono font-bold text-emerald-700">{fmtINR(inc.payout)}</td>
+            <Card title="Sales vs incentive earned" subtitle={fmtMonth(month)} bodyClass="p-0" noBody>
+              <div className="overflow-x-auto">
+                <table className="w-full dense-table text-[12.5px]">
+                  <thead><tr><th>Employee</th><th className="text-right">Sales</th><th>Basis</th><th className="text-right">Max eligible</th><th className="text-right">Incentive</th></tr></thead>
+                  <tbody>
+                    {[...incRows].sort((a, b) => b.inc.payout - a.inc.payout).slice(0, 80).map((r) => (
+                      <tr key={r.emp.id}>
+                        <td><div className="flex items-center gap-2 min-w-0"><Avatar emp={r.emp} size={24}/><span className="truncate font-semibold">{r.emp.name}</span></div></td>
+                        <td className="text-right font-mono">{fmtINRShort(r.sales)}</td>
+                        <td>
+                          <Badge tone={r.inc.winner === 'target' ? 'brand' : 'violet'}>
+                            {r.inc.winner === 'target' ? 'Store target' : 'Slab'}
+                          </Badge>
+                        </td>
+                        <td className="text-right font-mono text-slate-500">{fmtINR(r.inc.maxEligible || r.inc.payout)}</td>
+                        <td className="text-right font-mono font-bold text-emerald-700 dark:text-emerald-400">{fmtINR(r.inc.payout)}</td>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {emps.length > 80 && <div className="p-2 text-center text-[11px] text-slate-500">Showing first 80 of {emps.length} employees</div>}
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {incRows.length > 80 && <div className="p-2 text-center text-[11px] text-slate-500">Showing first 80 of {incRows.length} employees</div>}
             </Card>
           </div>
         </div>
       )}
 
-      {tab === 'deployment' && (
+      {emps.length > 0 && tab === 'deployment' && (
         <div className="grid grid-cols-12 gap-4">
           <div className="col-span-12 lg:col-span-7">
-            <Card title="Manpower deployment across India" subtitle={`${sitesWithCount.length} staffed client sites`} bodyClass="p-3">
+            <Card title="Manpower deployment across India" subtitle={`${sitesWithCount.length} staffed client sites in scope`} bodyClass="p-3">
               <IndiaMapSVG sites={sitesWithCount.slice(0, 60)} height={340}/>
             </Card>
           </div>
@@ -265,20 +482,21 @@ function ReportsPage({ user }) {
             <Card title="Site roster" subtitle={`${sitesWithCount.length} staffed sites · top 40 shown`} bodyClass="p-0" className="max-h-[560px] overflow-auto">
               {sitesWithCount.slice(0, 40).map((s) => (
                 <div key={s.id} className="p-3 border-b border-slate-100 dark:border-slate-800 last:border-0">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <div>
-                      <div className="text-[12px] font-semibold text-slate-800 dark:text-slate-100">{s.name}</div>
-                      <div className="text-[10px] text-slate-500 font-mono">{s.lat.toFixed(3)}, {s.lng.toFixed(3)}</div>
+                  <div className="flex items-center justify-between mb-1.5 gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[12px] font-semibold text-slate-800 dark:text-slate-100 truncate">{s.name}</div>
+                      <div className="text-[10px] text-slate-500">{s.city} · {s.zone} · TL {s.cm || '—'}</div>
                     </div>
                     <Badge tone="brand">{s.staffCount} staff</Badge>
                   </div>
                   <div className="flex -space-x-2">
-                    {store.getEmployees({ siteId: s.id, status: 'active' }).map((e) => (
+                    {emps.filter((e) => e.siteId === s.id).slice(0, 12).map((e) => (
                       <Avatar key={e.id} emp={e} size={24} className="ring-2 ring-white dark:ring-slate-900"/>
                     ))}
                   </div>
                 </div>
               ))}
+              {sitesWithCount.length === 0 && <Empty title="No staffed sites in scope"/>}
             </Card>
           </div>
         </div>
@@ -287,4 +505,4 @@ function ReportsPage({ user }) {
   );
 }
 
-Object.assign(window, { ReportsPage, LineChart, IndiaMapSVG });
+Object.assign(window, { ReportsPage, ReportFilters, LineChart, IndiaMapSVG, REPORT_BLANK, monthsInRange });

@@ -1,4 +1,6 @@
-/* Mobile attendance: clock-in/out with webcam + geofence check, 2hr checks, history, regularisation submit */
+/* Mobile attendance: clock-in/out with webcam + geo-fence check, history,
+   regularisation submit. There is no periodic re-check — a shift is one
+   clock-in and one clock-out, and anything missed goes to Regularise. */
 function MobileAttendance({ emp }) {
   const store = useStore();
   const toast = useToast();
@@ -38,12 +40,13 @@ function ClockPanel({ emp }) {
   const geo = store.checkGeofence(emp.id, pos.lat, pos.lng);
 
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [captureFor, setCaptureFor] = useState(null); // 'clock-in' | 'clock-out' | '2hr-check'
+  const [captureFor, setCaptureFor] = useState(null); // 'clock-in' | 'clock-out'
   const [offline, setOffline] = useState(false);
   const [queued, setQueued] = useState(0);
 
   const startCapture = (type) => {
-    if ((type === 'clock-in' || type === '2hr-check') && !geo.inside && type === 'clock-in') {
+    // The fence only gates clock-in, and only when it is enabled for this person.
+    if (type === 'clock-in' && geo.enforced && !geo.inside) {
       toast(`You are ${Math.round(geo.distance)}m outside the geo-fence — cannot clock in`, 'error');
       return;
     }
@@ -86,16 +89,28 @@ function ClockPanel({ emp }) {
           : <Btn size="xs" onClick={() => setOffline(true)}>Go offline</Btn>}
       </div>
 
-      {/* Geofence status card */}
-      <div className={`rounded-xl p-3 border ${geo.inside ? 'bg-emerald-50 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800' : 'bg-rose-50 border-rose-200 dark:bg-rose-900/20 dark:border-rose-800'}`}>
-        <div className="flex items-center gap-2">
-          <Icon name={geo.inside ? 'check-circle' : 'alert'} className={`w-5 h-5 ${geo.inside ? 'text-emerald-600' : 'text-rose-600'}`}/>
-          <div className="flex-1">
-            <div className={`text-[12px] font-bold ${geo.inside ? 'text-emerald-800 dark:text-emerald-200' : 'text-rose-800 dark:text-rose-200'}`}>{geo.inside ? 'Inside geo-fence' : 'Outside geo-fence'}</div>
-            <div className="text-[11px] text-slate-600 dark:text-slate-300">{Math.round(geo.distance)}m from {site.name}</div>
+      {/* Geo-fence status card — reads differently when the fence is switched off */}
+      {!geo.enforced ? (
+        <div className="rounded-xl p-3 border bg-slate-50 border-slate-200 dark:bg-slate-800/50 dark:border-slate-700">
+          <div className="flex items-center gap-2">
+            <Icon name="pin" className="w-5 h-5 text-slate-400"/>
+            <div className="flex-1">
+              <div className="text-[12px] font-bold text-slate-700 dark:text-slate-200">Geo-fencing not required</div>
+              <div className="text-[11px] text-slate-500">You can clock in from any location.</div>
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className={`rounded-xl p-3 border ${geo.inside ? 'bg-emerald-50 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800' : 'bg-rose-50 border-rose-200 dark:bg-rose-900/20 dark:border-rose-800'}`}>
+          <div className="flex items-center gap-2">
+            <Icon name={geo.inside ? 'check-circle' : 'alert'} className={`w-5 h-5 ${geo.inside ? 'text-emerald-600' : 'text-rose-600'}`}/>
+            <div className="flex-1">
+              <div className={`text-[12px] font-bold ${geo.inside ? 'text-emerald-800 dark:text-emerald-200' : 'text-rose-800 dark:text-rose-200'}`}>{geo.inside ? 'Inside geo-fence' : 'Outside geo-fence'}</div>
+              <div className="text-[11px] text-slate-600 dark:text-slate-300">{Math.round(geo.distance)}m from {site.name}</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Mini map with draggable position */}
       <div className="rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 relative">
@@ -121,20 +136,25 @@ function ClockPanel({ emp }) {
         </button>
       </div>
 
-      <button onClick={() => startCapture('2hr-check')} disabled={!clockIn || !!clockOut}
-        className="w-full p-3 rounded-xl border border-brand-200 dark:border-brand-800 bg-brand-50 dark:bg-brand-900/20 flex items-center gap-3 disabled:opacity-50">
-        <div className="w-10 h-10 rounded-full bg-brand-700 text-white flex items-center justify-center"><Icon name="target" className="w-4 h-4"/></div>
-        <div className="flex-1 text-left">
-          <div className="text-[12px] font-bold text-brand-900 dark:text-brand-100">2-hour location check</div>
-          <div className="text-[11px] text-brand-700 dark:text-brand-300">Trigger check now (demo)</div>
+      {/* Missed a mark? Regularise it — no periodic re-check exists any more. */}
+      {clockIn && clockOut && (
+        <div className="rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/20 p-3 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0"><Icon name="check" className="w-4 h-4"/></div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[12px] font-bold text-emerald-900 dark:text-emerald-100">Shift complete</div>
+            <div className="text-[11px] text-emerald-700 dark:text-emerald-300">
+              {fmtTime(clockIn.timestamp)} – {fmtTime(clockOut.timestamp)} · both marks recorded
+            </div>
+          </div>
         </div>
-        <Icon name="chevron-right" className="w-4 h-4 text-brand-700"/>
-      </button>
+      )}
 
       <div className="rounded-xl bg-slate-50 dark:bg-slate-800/50 p-3 flex items-start gap-2">
-        <Icon name="info" className="w-4 h-4 text-brand-700 dark:text-brand-300 mt-0.5"/>
+        <Icon name="info" className="w-4 h-4 text-brand-700 dark:text-brand-300 mt-0.5 shrink-0"/>
         <div className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-          <span className="font-semibold text-slate-800 dark:text-slate-100">Live capture only.</span> Gallery uploads are disabled. Every mark is stamped with time, GPS coordinates, and inside/outside geo-fence status.
+          <span className="font-semibold text-slate-800 dark:text-slate-100">Two marks a day.</span> Clock in when you arrive and clock out when you leave — nothing else is required during your shift.
+          Each mark is a live capture stamped with the time and your location; gallery uploads are disabled.
+          Missed one? Raise it under <span className="font-semibold">Regularise</span>.
         </div>
       </div>
 
@@ -230,7 +250,7 @@ function CameraCapture({ onClose, onCapture, pos, inside }) {
     <div className="absolute inset-0 z-30 bg-black flex flex-col anim-in">
       <div className="p-3 flex items-center justify-between text-white">
         <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full bg-white/20"><Icon name="x"/></button>
-        <div className="text-[12px] font-semibold">Live selfie · geo-stamped</div>
+        <div className="text-[12px] font-semibold">Live photo · geo-stamped</div>
         <div className="w-8"/>
       </div>
       <div className="flex-1 flex items-center justify-center relative bg-slate-900">

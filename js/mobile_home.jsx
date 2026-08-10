@@ -1,4 +1,4 @@
-/* Mobile home: today's status, 2hr check, targets, store-specific incentive, kudos */
+/* Mobile home: today's status, targets, store-specific incentive, kudos */
 function MobileHome({ emp, setTab }) {
   const store = useStore();
   const today = '2026-07-15';
@@ -6,7 +6,6 @@ function MobileHome({ emp, setTab }) {
   const marks = store.getAttendance({ employeeId: emp.id, date: today });
   const clockIn = marks.find((m) => m.type === 'clock-in');
   const clockOut = marks.find((m) => m.type === 'clock-out');
-  const checks = marks.filter((m) => m.type === '2hr-check');
   const site = store.getSite(emp.siteId);
   const sales = store.getSales(emp.id, july)?.totalSales || 0;
   const detail = store.incentiveDetail(emp, july);
@@ -14,9 +13,11 @@ function MobileHome({ emp, setTab }) {
   const kudos = store.getKudos(emp.id);
   const payJul = store.computePayslip(emp.id, july);
 
-  const nextCheck = new Date('2026-07-15T14:00:00+05:30');
-  const now = new Date('2026-07-15T12:30:00+05:30');
-  const minsToNext = Math.round((nextCheck - now) / 60000);
+  // Hours on shift so far, against the store's published shift window.
+  const shiftEnd = site && site.shiftEnd ? site.shiftEnd : '19:00';
+  const onShiftFor = clockIn && !clockOut
+    ? ((new Date('2026-07-15T12:30:00+05:30') - new Date(clockIn.timestamp)) / 3600000)
+    : null;
 
   const fmtShort = (n) => (n >= 100000 ? '₹' + (n / 100000).toFixed(n % 100000 ? 1 : 0) + 'L' : n >= 1000 ? '₹' + Math.round(n / 1000) + 'k' : '₹' + n);
 
@@ -32,9 +33,9 @@ function MobileHome({ emp, setTab }) {
           <div className="flex items-center gap-3 mt-3">
             <div className="flex-1"><div className="text-[10px] opacity-70">Clock-in</div><div className="text-[13px] font-bold font-mono">{clockIn ? fmtTime(clockIn.timestamp) : '—'}</div></div>
             <div className="w-px h-8 bg-white/30"/>
-            <div className="flex-1"><div className="text-[10px] opacity-70">Next 2-hr check</div><div className="text-[13px] font-bold font-mono">{minsToNext > 0 ? `in ${minsToNext} min` : 'Due now'}</div></div>
+            <div className="flex-1"><div className="text-[10px] opacity-70">Clock-out</div><div className="text-[13px] font-bold font-mono">{clockOut ? fmtTime(clockOut.timestamp) : `by ${shiftEnd}`}</div></div>
             <div className="w-px h-8 bg-white/30"/>
-            <div className="flex-1"><div className="text-[10px] opacity-70">Checks done</div><div className="text-[13px] font-bold font-mono">{checks.length}</div></div>
+            <div className="flex-1"><div className="text-[10px] opacity-70">On shift</div><div className="text-[13px] font-bold font-mono">{onShiftFor != null ? `${onShiftFor.toFixed(1)}h` : clockOut ? 'Done' : '—'}</div></div>
           </div>
         </div>
       </div>
@@ -43,8 +44,10 @@ function MobileHome({ emp, setTab }) {
       <button onClick={() => setTab('attendance')} className="w-full py-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-card flex items-center gap-3 px-4 hover:bg-slate-50 dark:hover:bg-slate-800/80">
         <div className="w-11 h-11 rounded-xl bg-brand-100 dark:bg-brand-900/40 text-brand-700 dark:text-brand-300 flex items-center justify-center"><Icon name="camera" className="w-5 h-5"/></div>
         <div className="flex-1 text-left">
-          <div className="text-[13px] font-bold text-slate-800 dark:text-white">{clockIn && !clockOut ? 'Complete 2-hour check' : clockOut ? 'Shift complete' : 'Clock in with live photo'}</div>
-          <div className="text-[11px] text-slate-500">Geo-fenced · location auto-captured</div>
+          <div className="text-[13px] font-bold text-slate-800 dark:text-white">{clockIn && !clockOut ? 'Clock out with live photo' : clockOut ? 'Shift complete' : 'Clock in with live photo'}</div>
+          <div className="text-[11px] text-slate-500">
+            {emp.geoFenceEnabled === false ? 'Location auto-captured · no geo-fence' : 'Geo-fenced · location auto-captured'}
+          </div>
         </div>
         <Icon name="chevron-right" className="w-4 h-4 text-slate-400"/>
       </button>
@@ -131,7 +134,7 @@ function MobileHome({ emp, setTab }) {
         {marks.length === 0 && <div className="text-[11px] text-slate-400">No activity yet — clock in to start.</div>}
         {marks.map((m) => (
           <div key={m.id} className="flex items-center gap-2 py-1.5">
-            <div className={`w-6 h-6 rounded-full flex items-center justify-center ${m.insideGeofence ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}><Icon name={m.type === 'clock-in' ? 'check' : m.type === '2hr-check' ? 'target' : 'x'} className="w-3 h-3"/></div>
+            <div className={`w-6 h-6 rounded-full flex items-center justify-center ${m.insideGeofence ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}><Icon name={m.type === 'clock-in' ? 'check' : 'x'} className="w-3 h-3"/></div>
             <div className="flex-1 text-[11px] text-slate-700 dark:text-slate-200 capitalize">{m.type.replace('-', ' ')}</div>
             <div className="text-[11px] font-mono text-slate-500">{fmtTime(m.timestamp)}</div>
           </div>

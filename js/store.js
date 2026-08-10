@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  const LS_KEY = 'sdc_hrms_v4';           // bumped: people hierarchy (manager ids on sites + store managers)
+  const LS_KEY = 'sdc_hrms_v5';           // bumped: employee lifecycle, store targets, policies, designations
   const TODAY = new Date('2026-07-15T10:30:00+05:30'); // demo "today" (mid-month)
   const D = window.SDCData || { sites: [], employees: [], slabTemplates: [], zones: [], regions: [], businessManagers: [], clusterManagers: [], defaultSlabId: null, meta: {} };
 
@@ -26,6 +26,72 @@
       Math.sin(dLat / 2) ** 2 +
       Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
     return 2 * R * Math.asin(Math.sqrt(a));
+  }
+
+  /* ---------- reference data ----------
+
+     Two structurally different kinds of staff share one employee record:
+
+       FIELD  — technicians and store managers posted to a client store. They
+                clock in against a geo-fence, earn sales incentives, and their
+                pay is pro-rated on attendance.
+       OFFICE — HR, Admin, Super Admin and other desk staff. No geo-fence, no
+                store, no sales incentive; fixed monthly pay.
+
+     `employeeType` drives onboarding requirements, attendance rules and payroll,
+     so it is set on every record (defaulting to 'field' for legacy rows). */
+  const EMPLOYEE_TYPES = [
+    { id: 'field',  label: 'Field / Store Employee', geoFenceDefault: true,  needsStore: true  },
+    { id: 'office', label: 'Office / Desktop Employee', geoFenceDefault: false, needsStore: false },
+  ];
+
+  /* Career ladders, ordered lowest → highest. "Upgrade designation" walks a
+     person up their own ladder; the UI also allows any designation to be picked
+     outright for lateral moves. */
+  const DESIGNATION_LADDERS = {
+    field: ['Trainee Technician', 'Technician', 'Senior Technician', 'Team Lead', 'Area Manager', 'Business Manager'],
+    office: ['Executive', 'Senior Executive', 'Assistant Manager', 'Manager', 'Senior Manager', 'Head of Department'],
+  };
+  const ALL_DESIGNATIONS = [...new Set([...DESIGNATION_LADDERS.field, ...DESIGNATION_LADDERS.office])];
+
+  /* The employee lifecycle the UI renders as a progress rail. `stage` is derived
+     from status + document/onboarding state rather than stored, so a record can
+     never drift out of sync with the data that actually gates each step. */
+  const LIFECYCLE_STAGES = [
+    { id: 'new',        label: 'New Employee' },
+    { id: 'registered', label: 'Registration' },
+    { id: 'documents',  label: 'Documents' },
+    { id: 'approval',   label: 'Approval' },
+    { id: 'onboarding', label: 'Onboarding' },
+    { id: 'active',     label: 'Active' },
+  ];
+
+  const REQUIRED_DOC_KEYS = ['aadhaar', 'pan', 'bank', 'photo'];
+
+  const BLANK_ADDRESS = {
+    line1: '', line2: '', line3: '', landmark: '',
+    city: '', district: '', state: '', country: 'India', pincode: '',
+  };
+
+  /* Fill in every field the newer UI reads so a record seeded before those
+     fields existed still renders. Called on seed and on load, which is what
+     lets an older persisted state upgrade in place instead of being wiped. */
+  function normaliseEmployee(e) {
+    const isOffice = e.employeeType ? e.employeeType === 'office' : e.role !== 'field-employee';
+    const type = e.employeeType || (isOffice ? 'office' : 'field');
+    return {
+      ...e,
+      employeeType: type,
+      // Office staff sit at a desk — a geo-fence would only generate false alerts.
+      geoFenceEnabled: e.geoFenceEnabled != null ? !!e.geoFenceEnabled : type === 'field',
+      designation: e.designation || (type === 'office' ? 'Executive' : e.isStoreManager ? 'Team Lead' : 'Technician'),
+      designationHistory: e.designationHistory || [],
+      // 'approved' is the right default for everyone already active in the system.
+      approvalStatus: e.approvalStatus || (e.status === 'pending' ? 'pending-approval' : e.status === 'rejected' ? 'rejected' : 'approved'),
+      address: { ...BLANK_ADDRESS, ...(e.address || {}) },
+      education: e.education || [],
+      photoUrl: e.photoUrl || null,
+    };
   }
 
   // ---------- seed ----------
@@ -48,19 +114,22 @@
     const sites = demoSites.concat(realSites);
 
     // ----- demo employees (kept for lively demo) -----
+    const addr = (line1, city, district, state, pincode) => ({
+      line1, line2: '', line3: '', landmark: '', city, district, state, country: 'India', pincode,
+    });
     const demoEmployees = [
-      { id: 'emp_001', code: 'SDC001', name: 'Rahul Verma',  phone: '+91 98200 11001', email: 'rahul.v@sdc.in',  role: 'field-employee', status: 'active',  siteId: 'site_mum', joiningDate: '2025-11-04', aadhaarMasked: 'XXXX-XXXX-4321', panMasked: 'ABXXX7845N', bankVerified: true, baseSalary: 18000, avatarHue: 210, travelEligible: true,  travelAmount: 2000, demo: true },
-      { id: 'emp_002', code: 'SDC002', name: 'Priya Nair',   phone: '+91 98200 11002', email: 'priya.n@sdc.in',  role: 'field-employee', status: 'active',  siteId: 'site_mum', joiningDate: '2025-08-12', aadhaarMasked: 'XXXX-XXXX-7712', panMasked: 'CDXXX2210K', bankVerified: true, baseSalary: 16000, avatarHue: 340, travelEligible: false, travelAmount: 1500, demo: true },
-      { id: 'emp_003', code: 'SDC003', name: 'Amit Sharma',  phone: '+91 98110 22003', email: 'amit.s@sdc.in',   role: 'field-employee', status: 'active',  siteId: 'site_del', joiningDate: '2025-06-01', aadhaarMasked: 'XXXX-XXXX-9021', panMasked: 'EFXXX9083P', bankVerified: true, baseSalary: 15000, avatarHue: 25,  travelEligible: true,  travelAmount: 2500, demo: true },
-      { id: 'emp_004', code: 'SDC004', name: 'Sneha Iyer',   phone: '+91 98400 33004', email: 'sneha.i@sdc.in',  role: 'field-employee', status: 'active',  siteId: 'site_blr', joiningDate: '2026-01-20', aadhaarMasked: 'XXXX-XXXX-5580', panMasked: 'GHXXX4432L', bankVerified: true, baseSalary: 14000, avatarHue: 165, travelEligible: false, travelAmount: 1000, demo: true },
-      { id: 'emp_005', code: 'SDC005', name: 'Vikram Singh', phone: '+91 98110 44005', email: 'vikram.s@sdc.in', role: 'field-employee', status: 'active',  siteId: 'site_del', joiningDate: '2025-09-18', aadhaarMasked: 'XXXX-XXXX-1197', panMasked: 'IJXXX7719Q', bankVerified: true, baseSalary: 15000, avatarHue: 265, travelEligible: true,  travelAmount: 2000, demo: true },
-      { id: 'emp_006', code: 'SDC006', name: 'Kavya Reddy',  phone: '+91 98860 55006', email: 'kavya.r@sdc.in',  role: 'field-employee', status: 'active',  siteId: 'site_pun', joiningDate: '2025-12-02', aadhaarMasked: 'XXXX-XXXX-2263', panMasked: 'KLXXX3390M', bankVerified: true, baseSalary: 17000, avatarHue: 300, travelEligible: false, travelAmount: 1500, demo: true },
+      { id: 'emp_001', code: 'SDC001', name: 'Rahul Verma',  phone: '+91 98200 11001', email: 'rahul.v@sdc.in',  role: 'field-employee', status: 'active',  siteId: 'site_mum', joiningDate: '2025-11-04', aadhaarMasked: 'XXXX-XXXX-4321', panMasked: 'ABXXX7845N', bankVerified: true, baseSalary: 18000, avatarHue: 210, travelEligible: true,  travelAmount: 2000, demo: true, designation: 'Senior Technician', address: addr('12 Sunrise Apartments, JVLR', 'Mumbai', 'Mumbai Suburban', 'Maharashtra', '400059') },
+      { id: 'emp_002', code: 'SDC002', name: 'Priya Nair',   phone: '+91 98200 11002', email: 'priya.n@sdc.in',  role: 'field-employee', status: 'active',  siteId: 'site_mum', joiningDate: '2025-08-12', aadhaarMasked: 'XXXX-XXXX-7712', panMasked: 'CDXXX2210K', bankVerified: true, baseSalary: 16000, avatarHue: 340, travelEligible: false, travelAmount: 1500, demo: true, designation: 'Technician', address: addr('7B Green Meadows, Andheri West', 'Mumbai', 'Mumbai Suburban', 'Maharashtra', '400053') },
+      { id: 'emp_003', code: 'SDC003', name: 'Amit Sharma',  phone: '+91 98110 22003', email: 'amit.s@sdc.in',   role: 'field-employee', status: 'active',  siteId: 'site_del', joiningDate: '2025-06-01', aadhaarMasked: 'XXXX-XXXX-9021', panMasked: 'EFXXX9083P', bankVerified: true, baseSalary: 15000, avatarHue: 25,  travelEligible: true,  travelAmount: 2500, demo: true, designation: 'Technician', address: addr('221 Karol Bagh', 'Delhi', 'Central Delhi', 'Delhi', '110005') },
+      { id: 'emp_004', code: 'SDC004', name: 'Sneha Iyer',   phone: '+91 98400 33004', email: 'sneha.i@sdc.in',  role: 'field-employee', status: 'active',  siteId: 'site_blr', joiningDate: '2026-01-20', aadhaarMasked: 'XXXX-XXXX-5580', panMasked: 'GHXXX4432L', bankVerified: true, baseSalary: 14000, avatarHue: 165, travelEligible: false, travelAmount: 1000, demo: true, designation: 'Trainee Technician', address: addr('44 Indiranagar 100ft Road', 'Bengaluru', 'Bengaluru Urban', 'Karnataka', '560038') },
+      { id: 'emp_005', code: 'SDC005', name: 'Vikram Singh', phone: '+91 98110 44005', email: 'vikram.s@sdc.in', role: 'field-employee', status: 'active',  siteId: 'site_del', joiningDate: '2025-09-18', aadhaarMasked: 'XXXX-XXXX-1197', panMasked: 'IJXXX7719Q', bankVerified: true, baseSalary: 15000, avatarHue: 265, travelEligible: true,  travelAmount: 2000, demo: true, designation: 'Technician', address: addr('9 Lajpat Nagar II', 'Delhi', 'South Delhi', 'Delhi', '110024') },
+      { id: 'emp_006', code: 'SDC006', name: 'Kavya Reddy',  phone: '+91 98860 55006', email: 'kavya.r@sdc.in',  role: 'field-employee', status: 'active',  siteId: 'site_pun', joiningDate: '2025-12-02', aadhaarMasked: 'XXXX-XXXX-2263', panMasked: 'KLXXX3390M', bankVerified: true, baseSalary: 17000, avatarHue: 300, travelEligible: false, travelAmount: 1500, demo: true, designation: 'Senior Technician', address: addr('301 Kalyani Nagar', 'Pune', 'Pune', 'Maharashtra', '411006') },
       // Pending onboarding
-      { id: 'emp_007', code: 'SDC007', name: 'Arjun Mehta',  phone: '+91 98330 66007', email: 'arjun.m@sdc.in',  role: 'field-employee', status: 'pending', siteId: 'site_mum', joiningDate: '', aadhaarMasked: 'XXXX-XXXX-8842', panMasked: 'MNXXX5501Z', bankVerified: true, baseSalary: 15000, avatarHue: 130, travelEligible: false, travelAmount: 0, submittedAt: iso(TODAY), demo: true },
-      // Admin & managers (role picker)
-      { id: 'usr_admin', code: 'ADM01', name: 'Neha Kapoor',  phone: '+91 98111 00001', email: 'neha.k@sdc.in',  role: 'super-admin', status: 'active', siteId: null, joiningDate: '2024-01-10', avatarHue: 220, baseSalary: 0 },
-      { id: 'usr_hr',    code: 'HR001', name: 'Rohit Sinha',  phone: '+91 98111 00002', email: 'rohit.s@sdc.in', role: 'hr-manager',  status: 'active', siteId: null, joiningDate: '2024-05-14', avatarHue: 190, baseSalary: 0 },
-      { id: 'usr_sm',    code: 'SM001', name: 'Ananya Rao',   phone: '+91 98111 00003', email: 'ananya.r@sdc.in',role: 'site-manager', status: 'active', siteId: 'site_mum', joiningDate: '2024-03-22', avatarHue: 40, baseSalary: 0 },
+      { id: 'emp_007', code: 'SDC007', name: 'Arjun Mehta',  phone: '+91 98330 66007', email: 'arjun.m@sdc.in',  role: 'field-employee', status: 'pending', siteId: 'site_mum', joiningDate: '', aadhaarMasked: 'XXXX-XXXX-8842', panMasked: 'MNXXX5501Z', bankVerified: true, baseSalary: 15000, avatarHue: 130, travelEligible: false, travelAmount: 0, submittedAt: iso(TODAY), demo: true, designation: 'Technician', approvalStatus: 'pending-approval', submittedBy: 'usr_hr' },
+      // Admin & managers (role picker) — office staff: no store, no geo-fence
+      { id: 'usr_admin', code: 'ADM01', name: 'Neha Kapoor',  phone: '+91 98111 00001', email: 'neha.k@sdc.in',  role: 'super-admin', status: 'active', siteId: null, joiningDate: '2024-01-10', avatarHue: 220, baseSalary: 0, employeeType: 'office', designation: 'Head of Department' },
+      { id: 'usr_hr',    code: 'HR001', name: 'Rohit Sinha',  phone: '+91 98111 00002', email: 'rohit.s@sdc.in', role: 'hr-manager',  status: 'active', siteId: null, joiningDate: '2024-05-14', avatarHue: 190, baseSalary: 0, employeeType: 'office', designation: 'Manager' },
+      { id: 'usr_sm',    code: 'SM001', name: 'Ananya Rao',   phone: '+91 98111 00003', email: 'ananya.r@sdc.in',role: 'site-manager', status: 'active', siteId: 'site_mum', joiningDate: '2024-03-22', avatarHue: 40, baseSalary: 0, employeeType: 'office', designation: 'Assistant Manager' },
     ];
 
     // ----- real employees from xlsx -----
@@ -76,7 +145,7 @@
       salesJun: e.salesJun, salesJul: e.salesJul, monthlyTarget: Math.round((e.salesJul * 1.15) / 5000) * 5000,
     }));
 
-    const employees = demoEmployees.concat(realEmployees);
+    const employees = demoEmployees.concat(realEmployees).map(normaliseEmployee);
 
     // ---- attendance (only demo employees get rich per-mark records) ----
     const attendancePlan = {
@@ -115,6 +184,8 @@
         attendance.push({ id: uid('att'), employeeId: eid, date: dateKey(dt), type: 'clock-out', timestamp: iso(dtOut), latitude: site.lat, longitude: site.lng, insideGeofence: true, photoUrl: null });
       }
     });
+    /* Today's live marks. One employee (emp_005) sits outside their fence so the
+       live map and breach alerts have something real to show. */
     const today = dateKey(TODAY);
     empIds.forEach((eid, i) => {
       const emp = employees.find((e) => e.id === eid);
@@ -123,11 +194,10 @@
       const jitterLat = inFence ? (Math.random() - 0.5) * 0.0008 : 0.008;
       const jitterLng = inFence ? (Math.random() - 0.5) * 0.0008 : 0.011;
       const dt = new Date(2026, 6, 15, 10, 4 + i);
-      attendance.push({ id: uid('att'), employeeId: eid, date: today, type: 'clock-in', timestamp: iso(dt), latitude: site.lat + (Math.random() - 0.5) * 0.0004, longitude: site.lng + (Math.random() - 0.5) * 0.0004, insideGeofence: true, photoUrl: null });
-      [12, 14].forEach((hh) => {
-        const t = new Date(2026, 6, 15, hh, Math.floor(Math.random() * 20));
-        attendance.push({ id: uid('att'), employeeId: eid, date: today, type: '2hr-check', timestamp: iso(t), latitude: site.lat + jitterLat + (Math.random() - 0.5) * 0.0006, longitude: site.lng + jitterLng + (Math.random() - 0.5) * 0.0006, insideGeofence: eid !== 'emp_005', photoUrl: null });
-      });
+      attendance.push({ id: uid('att'), employeeId: eid, date: today, type: 'clock-in', timestamp: iso(dt),
+        latitude: site.lat + jitterLat + (Math.random() - 0.5) * 0.0004,
+        longitude: site.lng + jitterLng + (Math.random() - 0.5) * 0.0004,
+        insideGeofence: inFence, photoUrl: null });
     });
 
     // ---- sales records: demo employees + all real employees (Jun & Jul) ----
@@ -165,7 +235,7 @@
 
     const notifications = [
       { id: uid('ntf'), employeeId: 'emp_001', type: 'payroll',      message: 'Payroll for June credited: ₹18,000',            read: false, timestamp: iso(new Date(2026,6,1,10,0)) },
-      { id: uid('ntf'), employeeId: 'emp_001', type: 'geofence',     message: 'Reminder: 2-hour location check due at 14:00',  read: false, timestamp: iso(new Date(2026,6,15,13,55)) },
+      { id: uid('ntf'), employeeId: 'emp_001', type: 'attendance',   message: 'Clock-out reminder — your shift ends at 19:00',  read: false, timestamp: iso(new Date(2026,6,15,18,45)) },
       { id: uid('ntf'), employeeId: 'emp_001', type: 'appreciation', message: 'You received Kudos from your Site Manager: "Excellent customer handling!"', read: false, timestamp: iso(new Date(2026,6,14,18,0)) },
       { id: uid('ntf'), employeeId: 'emp_001', type: 'security',     message: '⚠ Developer Mode was detected on your device. Please disable it — repeated detections mark you absent.', read: false, timestamp: iso(new Date(2026,6,15,9,10)) },
       { id: uid('ntf'), employeeId: 'emp_002', type: 'regularisation', message: 'Your regularisation for 07-Jul is pending review.', read: false, timestamp: iso(new Date(2026,6,8,9,20)) },
@@ -183,9 +253,41 @@
     ];
     const devAbsences = {}; // key `${empId}|${date}` -> true
 
+    /* ---- store targets ----
+       One target per store per period. `amount` is the sales the store must do
+       in that month; `incentivePct` is the share of achieved sales paid out to
+       the staff posted there once the store clears its target. Achievement is
+       always computed from live sales records, never stored. */
+    const storeTargets = [
+      { id: uid('tgt'), siteId: 'site_mum', period: '2026-07', amount: 400000, incentivePct: 4, note: 'Festive quarter push' },
+      { id: uid('tgt'), siteId: 'site_mum', period: '2026-06', amount: 380000, incentivePct: 4, note: '' },
+      { id: uid('tgt'), siteId: 'site_del', period: '2026-07', amount: 200000, incentivePct: 5, note: '' },
+      { id: uid('tgt'), siteId: 'site_del', period: '2026-06', amount: 190000, incentivePct: 5, note: '' },
+      { id: uid('tgt'), siteId: 'site_blr', period: '2026-07', amount: 60000,  incentivePct: 6, note: 'New store ramp-up' },
+      { id: uid('tgt'), siteId: 'site_pun', period: '2026-07', amount: 120000, incentivePct: 3, note: '' },
+    ];
+
+    // ---- company policies / HR document library ----
+    const policyDoc = (title, category, summary, version, updated) => ({
+      id: slugId('pol', title), title, category, summary, version,
+      fileName: title.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-v' + version + '.pdf',
+      active: true, updatedAt: iso(updated), updatedBy: 'Neha Kapoor', acknowledgeRequired: true,
+      body: summary,
+    });
+    const policies = [
+      policyDoc('Company Policy Handbook', 'Policy', 'Company-wide operating principles, working hours, dress code and escalation paths for all S.D. Computronix staff.', '3.1', new Date(2026, 3, 12)),
+      policyDoc('Employee Handbook', 'Handbook', 'Everything a new joiner needs in their first 30 days — org structure, tools, benefits, and who to ask for what.', '2.4', new Date(2026, 1, 8)),
+      policyDoc('Code of Conduct', 'Policy', 'Expected professional behaviour with customers and colleagues, conflict-of-interest rules, and the anti-harassment policy.', '2.0', new Date(2025, 10, 20)),
+      policyDoc('Attendance Policy', 'Policy', 'Shift timings, geo-fenced clock-in rules, late-mark treatment, and how attendance regularisation requests are decided.', '4.0', new Date(2026, 5, 2)),
+      policyDoc('Leave Policy', 'Policy', 'Casual, sick and earned leave entitlements, carry-forward limits, and the approval chain for each leave type.', '2.2', new Date(2026, 2, 15)),
+      policyDoc('Salary & Payroll Policy', 'Payroll', 'Pay cycle, pro-rating for absence, statutory deductions (PF, ESIC, PT), incentive settlement and payslip access.', '3.0', new Date(2026, 4, 1)),
+      policyDoc('IT & Asset Policy', 'IT', 'Issued device handling, acceptable use, software installation rules, and the return process on exit.', '1.6', new Date(2025, 8, 30)),
+      policyDoc('Information Security Policy', 'Security', 'Customer data handling, password standards, device developer-mode prohibition, and incident reporting.', '2.1', new Date(2026, 0, 18)),
+    ];
+
     return {
       sites, employees, attendance, salesRecords,
-      slabs, slabTemplates,
+      slabs, slabTemplates, storeTargets, policies,
       regularisations, notifications, kudos, devEvents, devAbsences,
       hierarchy: buildHierarchy(sites, employees),
       payrolls: [],
@@ -275,7 +377,16 @@
   function load() {
     try {
       const s = localStorage.getItem(LS_KEY);
-      if (s) { state = JSON.parse(s); buildIndexes(); return; }
+      if (s) {
+        state = JSON.parse(s);
+        // Persisted state can predate fields the current UI reads; top it up
+        // rather than discarding the user's edits.
+        state.employees = (state.employees || []).map(normaliseEmployee);
+        state.storeTargets = state.storeTargets || [];
+        state.policies = state.policies || [];
+        buildIndexes();
+        return;
+      }
     } catch (e) { /* ignore */ }
     state = seed();
     buildIndexes();
@@ -401,8 +512,66 @@
     return { total: applied.reduce((n, r) => n + r.amount, 0), applied, pending };
   }
 
-  // calcIncentive(sales, emp?) — emp makes it store-specific; without emp, legacy global.
-  function calcIncentive(sales, emp) {
+  /* ---------- store targets ----------
+     A store carries at most one target per period (YYYY-MM). Achievement is
+     always summed live from the sales records of the staff posted there, so a
+     transfer or a corrected sales figure is reflected immediately. */
+  const getStoreTargets = (siteId) => (state.storeTargets || []).filter((t) => !siteId || t.siteId === siteId);
+  const getStoreTarget = (siteId, period) =>
+    (state.storeTargets || []).find((t) => t.siteId === siteId && t.period === period) || null;
+
+  /* Achievement is read once per employee during a payroll run, i.e. hundreds of
+     times per render across 562 stores. Cache it per site|period and drop the
+     cache on any mutation. */
+  let achieveCache = {};
+  function getStoreAchievement(siteId, period) {
+    const key = siteId + '|' + period;
+    if (achieveCache[key] != null) return achieveCache[key];
+    let total = 0;
+    for (const e of state.employees) {
+      if (e.siteId !== siteId || e.status !== 'active') continue;
+      total += getSales(e.id, period)?.totalSales || 0;
+    }
+    achieveCache[key] = total;
+    return total;
+  }
+
+  /* The store-target branch of the incentive calculation.
+
+     The store must clear its target before anything pays; once it does, each
+     employee posted there earns `incentivePct` of their OWN sales. `maxEligible`
+     is what the rule pays at exactly target — the figure the UI quotes when an
+     admin types a percentage against a target. */
+  function storeTargetIncentive(emp, period) {
+    const site = emp && emp.siteId ? getSite(emp.siteId) : null;
+    if (!site) return null;
+    const target = getStoreTarget(site.id, period);
+    if (!target || !(+target.amount > 0)) return null;
+    const amount = +target.amount;
+    const pct = +target.incentivePct || 0;
+    const achieved = getStoreAchievement(site.id, period);
+    const achievedPct = Math.round((achieved / amount) * 100);
+    const empSales = getSales(emp.id, period)?.totalSales || 0;
+    const met = achieved >= amount;
+    return {
+      targetId: target.id, period, siteId: site.id, siteName: site.name,
+      amount, pct, achieved, achievedPct, met, empSales,
+      payout: met ? Math.round((empSales * pct) / 100) : 0,
+      maxEligible: Math.round((amount * pct) / 100),
+    };
+  }
+
+  /* calcIncentive(sales, emp?, month?) — emp makes it store-specific.
+
+     Two independent branches can pay an employee, and the business rule is that
+     the HIGHER of the two wins (they are not added together):
+
+       A. Store target × incentive percentage
+       B. Incentive slab tiers + the employee/store threshold rules
+
+     Whichever branch yields more is the "maximum eligible" incentive; the final
+     payout is that figure clamped to the monthly ceiling. */
+  function calcIncentive(sales, emp, month) {
     if (emp) {
       const { template } = resolveSlab(emp);
       const site = getSite(emp.siteId);
@@ -415,15 +584,27 @@
       };
       const hasTemplate = template && template.kind !== 'none' && template.tiers && template.tiers.length;
       const slabPayout = hasTemplate ? payoutFromTiers(template.tiers, sales).payout : 0;
+      const slabBranch = slabPayout + rules.total;
+      const target = month ? storeTargetIncentive(emp, month) : null;
+      const targetBranch = target ? target.payout : 0;
 
-      if (template || rules.applied.length || rules.pending.length) {
-        const raw = slabPayout + rules.total;
-        const label = template ? (template.label || 'No incentive') : 'Threshold rules';
+      if (template || target || rules.applied.length || rules.pending.length) {
+        const raw = Math.max(slabBranch, targetBranch);
+        const winner = targetBranch > slabBranch ? 'target' : 'slab';
+        const label = winner === 'target'
+          ? `Store target · ${target.pct}% of sales`
+          : (template ? (template.label || 'No incentive') : 'Threshold rules');
         return {
           payout: clamp(raw, 0, RULE_CAP),
           slab: { id: template ? template.id : null, label },
           template: template || null,
-          breakdown: { slab: slabPayout, rules: rules.total, applied: rules.applied, pending: rules.pending },
+          winner,
+          maxEligible: raw,
+          breakdown: {
+            slab: slabPayout, rules: rules.total, slabBranch,
+            applied: rules.applied, pending: rules.pending,
+            target, targetBranch,
+          },
           capped: raw > RULE_CAP,
         };
       }
@@ -432,10 +613,10 @@
     const slabs = getSlabs();
     for (const s of slabs) {
       const hi = s.maxSales == null ? Infinity : s.maxSales;
-      if (sales >= s.minSales && sales <= hi) return { payout: s.payout, slab: s };
+      if (sales >= s.minSales && sales <= hi) return { payout: s.payout, slab: s, winner: 'slab', maxEligible: s.payout };
     }
     const top = slabs[slabs.length - 1];
-    return { payout: top.payout, slab: top };
+    return { payout: top.payout, slab: top, winner: 'slab', maxEligible: top.payout };
   }
 
   // Rich detail for the mobile progress UI — normalised tiers + next-tier hint.
@@ -446,7 +627,7 @@
 
     /* Independent threshold rules ride alongside whichever branch runs below,
        so the mobile app can show "unlocked" and "still locked" rules. */
-    const full = calcIncentive(sales, emp);
+    const full = calcIncentive(sales, emp, month);
     const bd = full.breakdown || { rules: 0, applied: [], pending: [] };
     const decorate = (r) => ({
       ...r,
@@ -479,6 +660,7 @@
       return {
         mode: 'template', source, raw: template.raw, label: template.label, sales,
         payout: full.payout, slabPayout, rules, capped: full.capped,
+        winner: full.winner, target: (full.breakdown || {}).target || null,
         tiers, next: next ? { fromLabel: fmtAmt(next.from), remaining: Math.max(0, next.from - sales), payoutText: next.type === 'pct' ? next.value + '%' : fmtAmt(next.value) } : null,
         progress: Math.max(0, Math.min(100, ((sales - base) / span) * 100)),
       };
@@ -494,6 +676,7 @@
     return {
       mode: 'global', source: 'global', raw: 'Company default bands', label: inc.slab.label, sales,
       payout: full.payout, slabPayout: inc.payout, rules, capped: full.capped, tiers,
+      winner: full.winner, target: (full.breakdown || {}).target || null,
       next: next ? { fromLabel: fmtAmt(next.minSales), remaining: Math.max(0, next.minSales - sales), payoutText: fmtAmt(next.payout) } : null,
       progress: Math.max(0, Math.min(100, ((sales - base) / span) * 100)),
     };
@@ -557,7 +740,11 @@
     const esic = Math.round(state.config.esicPct * emp.baseSalary);
     const pt = state.config.pt;
     const sales = getSales(empId, month)?.totalSales || 0;
-    const incResult = calcIncentive(sales, emp);
+    /* Office staff carry no store and no sales, so no incentive branch applies —
+       skipping the call also keeps a payroll run over 490 people cheap. */
+    const incResult = emp.employeeType === 'office'
+      ? { payout: 0, slab: { id: null, label: 'Not applicable' }, winner: 'slab', maxEligible: 0 }
+      : calcIncentive(sales, emp, month);
     const incentive = incResult.payout;
     const travelAllowance = emp.travelEligible ? (emp.travelAmount || state.config.defaultTravelAllowance) : 0;
     const netPay = emp.baseSalary - absenceDeduction - (pf + esic + pt) + incentive + travelAllowance;
@@ -567,6 +754,7 @@
       statutory: { pf, esic, pt, total: pf + esic + pt },
       sales, incentive, incentiveSlab: incResult.slab, travelAllowance,
       incentiveBreakdown: incResult.breakdown || null, incentiveCapped: !!incResult.capped,
+      incentiveWinner: incResult.winner || 'slab', incentiveMaxEligible: incResult.maxEligible || 0,
       netPay,
     };
   }
@@ -582,21 +770,30 @@
   const getPayrollRun = (month) => state.payrolls.find((r) => r.month === month);
 
   // ---------- mutations ----------
-  function invalidate() { state._eidx = null; state._sidx = null; }
+  function invalidate() { state._eidx = null; state._sidx = null; achieveCache = {}; }
   function updateEmployee(id, patch) {
     const e = getEmployee(id); if (!e) return;
     Object.assign(e, patch);
+    // Sales, store assignment and status all feed store-target achievement.
+    achieveCache = {};
     persist(); emit();
   }
   function addEmployee(emp) {
-    const full = { id: uid('emp'), code: 'SDC' + (100 + state.employees.length), status: 'pending', role: 'field-employee', baseSalary: 15000, avatarHue: Math.floor(Math.random() * 360), travelEligible: false, travelAmount: 0, submittedAt: iso(new Date()), ...emp };
+    const full = normaliseEmployee({
+      id: uid('emp'), code: 'SDC' + (100 + state.employees.length), status: 'pending',
+      role: 'field-employee', baseSalary: 15000, avatarHue: Math.floor(Math.random() * 360),
+      travelEligible: false, travelAmount: 0, submittedAt: iso(new Date()), ...emp,
+    });
     state.employees.push(full);
     invalidate(); persist(); emit();
     return full;
   }
   function approveEmployee(id, siteId) {
     const e = getEmployee(id); if (!e) return;
-    e.status = 'active'; e.siteId = siteId || e.siteId || 'site_mum';
+    e.status = 'active'; e.approvalStatus = 'approved';
+    // Office staff legitimately have no store; only default one for field staff.
+    if (e.employeeType !== 'office') e.siteId = siteId || e.siteId || 'site_mum';
+    else if (siteId) e.siteId = siteId;
     e.joiningDate = e.joiningDate || dateKey(new Date());
     e.rejectionReason = null;
     e.approvedAt = iso(new Date());
@@ -615,9 +812,137 @@
   function rejectEmployee(id, reason) {
     const e = getEmployee(id); if (!e) return;
     e.status = 'rejected';
+    e.approvalStatus = 'rejected';
     e.rejectionReason = reason || '';
     e.rejectedAt = iso(new Date());
     state.notifications.push({ id: uid('ntf'), employeeId: id, type: 'onboarding', message: reason ? `Your application needs attention: ${reason}` : 'Your onboarding application was not approved.', read: false, timestamp: iso(new Date()) });
+    persist(); emit();
+  }
+
+  /* ---------- approval workflow ----------
+
+     Super Admin creates an employee → the record is approved on the spot.
+     Anyone else creates one → it enters the queue as 'pending-approval' and a
+     Super Admin has to clear it. `roleCanSelfApprove` is the single place that
+     decision is made, so the wizard, the quick-add form and the document
+     uploader all behave identically. */
+  const roleCanSelfApprove = (role) => role === 'super-admin';
+
+  function submitForApproval(id, byUserId) {
+    const e = getEmployee(id); if (!e) return;
+    e.approvalStatus = 'pending-approval';
+    e.status = 'pending';
+    e.submittedAt = iso(new Date());
+    e.submittedBy = byUserId || null;
+    persist(); emit();
+  }
+
+  /* Document approval mirrors employee approval: an upload by a non-Super-Admin
+     lands as 'uploaded' (pending) and needs review; a Super Admin's upload is
+     verified immediately. */
+  function setDocumentStatus(empId, docKey, status, by) {
+    const e = getEmployee(empId); if (!e) return;
+    const docs = { ...(e.documents || {}) };
+    if (!docs[docKey]) docs[docKey] = { status: 'missing' };
+    docs[docKey] = {
+      ...docs[docKey], status,
+      [status === 'verified' ? 'verifiedAt' : 'reviewedAt']: iso(new Date()),
+      reviewedBy: by || null,
+    };
+    e.documents = docs;
+    persist(); emit();
+  }
+
+  /* ---------- designation ----------
+     Every change is appended to designationHistory so an employee's progression
+     (Technician → Senior Technician → Team Lead) stays auditable. */
+  function updateDesignation(empId, designation, byUserId, note) {
+    const e = getEmployee(empId); if (!e || !designation) return;
+    const from = e.designation || null;
+    if (from === designation) return;
+    e.designationHistory = (e.designationHistory || []).concat([{
+      from, to: designation, at: iso(new Date()), by: byUserId || null, note: note || '',
+    }]);
+    e.designation = designation;
+    state.notifications.push({ id: uid('ntf'), employeeId: empId, type: 'designation',
+      message: from ? `Your designation was updated: ${from} → ${designation}` : `Your designation was set to ${designation}`,
+      read: false, timestamp: iso(new Date()) });
+    persist(); emit();
+  }
+
+  const setGeoFence = (empId, enabled) => updateEmployee(empId, { geoFenceEnabled: !!enabled });
+
+  /* ---------- email validation ----------
+     Stands in for the address-verification API: syntax, disposable-domain and
+     uniqueness checks, returning the same shape a real call would. */
+  const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+  const DISPOSABLE_DOMAINS = ['mailinator.com', 'tempmail.com', 'guerrillamail.com', '10minutemail.com', 'yopmail.com', 'trashmail.com'];
+  function validateEmail(email, excludeEmpId) {
+    const value = String(email || '').trim();
+    if (!value) return { valid: false, reason: 'Email address is required' };
+    if (!EMAIL_RE.test(value)) return { valid: false, reason: 'That does not look like a valid email address' };
+    const domain = value.split('@')[1].toLowerCase();
+    if (DISPOSABLE_DOMAINS.includes(domain)) return { valid: false, reason: 'Disposable email domains are not accepted' };
+    const clash = state.employees.find((e) => e.id !== excludeEmpId && (e.email || '').toLowerCase() === value.toLowerCase());
+    if (clash) return { valid: false, reason: `Already used by ${clash.name} (${clash.code})`, duplicateOf: clash.id };
+    return { valid: true, reason: 'Address is valid and not already in use', domain };
+  }
+
+  /* ---------- store targets ---------- */
+  function upsertStoreTarget(target) {
+    if (!state.storeTargets) state.storeTargets = [];
+    const next = {
+      ...target,
+      amount: +target.amount || 0,
+      incentivePct: +target.incentivePct || 0,
+    };
+    const i = state.storeTargets.findIndex((t) => next.id
+      ? t.id === next.id
+      : (t.siteId === next.siteId && t.period === next.period));
+    if (i >= 0) state.storeTargets[i] = { ...state.storeTargets[i], ...next };
+    else state.storeTargets.push({ ...next, id: next.id || uid('tgt') });
+    achieveCache = {}; persist(); emit();
+  }
+  function deleteStoreTarget(id) {
+    state.storeTargets = (state.storeTargets || []).filter((t) => t.id !== id);
+    achieveCache = {}; persist(); emit();
+  }
+  /* Everything a target card needs: the target, what the store actually did, and
+     what that means in rupees for the staff posted there. */
+  function getStoreTargetSummary(siteId, period) {
+    const target = getStoreTarget(siteId, period);
+    const achieved = getStoreAchievement(siteId, period);
+    const staff = getEmployees({ siteId, status: 'active' });
+    if (!target) return { target: null, achieved, staffCount: staff.length, achievedPct: null, incentiveGenerated: 0 };
+    const amount = +target.amount || 0;
+    const incentiveGenerated = staff.reduce((n, e) => n + (storeTargetIncentive(e, period) || { payout: 0 }).payout, 0);
+    return {
+      target, achieved, staffCount: staff.length,
+      achievedPct: amount > 0 ? Math.round((achieved / amount) * 100) : null,
+      met: amount > 0 && achieved >= amount,
+      incentiveGenerated,
+      maxEligible: Math.round((amount * (+target.incentivePct || 0)) / 100),
+    };
+  }
+
+  /* ---------- company policies / HR documents ---------- */
+  const getPolicies = (opts) => (state.policies || [])
+    .filter((p) => (opts && opts.activeOnly ? p.active : true))
+    .slice()
+    .sort((a, b) => (a.category || '').localeCompare(b.category || '') || (a.title || '').localeCompare(b.title || ''));
+  function upsertPolicy(policy, byName) {
+    if (!state.policies) state.policies = [];
+    const next = { ...policy, updatedAt: iso(new Date()), updatedBy: byName || policy.updatedBy || 'Admin' };
+    const i = state.policies.findIndex((p) => p.id === next.id);
+    if (i >= 0) state.policies[i] = { ...state.policies[i], ...next };
+    else state.policies.push({ ...next, id: next.id || uid('pol'), active: next.active !== false });
+    persist(); emit();
+  }
+  function deletePolicy(id) { state.policies = (state.policies || []).filter((p) => p.id !== id); persist(); emit(); }
+  function togglePolicy(id, active) {
+    const p = (state.policies || []).find((x) => x.id === id); if (!p) return;
+    p.active = active != null ? !!active : !p.active;
+    p.updatedAt = iso(new Date());
     persist(); emit();
   }
 
@@ -701,6 +1026,7 @@
     let rec = getSales(empId, month);
     if (!rec) { rec = { id: uid('sal'), employeeId: empId, month, totalSales }; state.salesRecords.push(rec); salesIndex[empId + '|' + month] = rec; }
     else rec.totalSales = totalSales;
+    achieveCache = {};
     persist(); emit();
   }
   function markNotificationRead(id) { const n = state.notifications.find((x) => x.id === id); if (n) { n.read = true; persist(); emit(); } }
@@ -770,11 +1096,49 @@
   // ---------- geo-fence ----------
   function checkGeofence(empId, lat, lng) {
     const emp = getEmployee(empId);
-    if (!emp || !emp.siteId) return { inside: false, distance: null, site: null };
-    const site = getSite(emp.siteId);
-    if (!site) return { inside: false, distance: null, site: null };
+    if (!emp) return { inside: false, distance: null, site: null, enforced: false };
+    /* Geo-fencing off — office staff, or switched off for this person — means
+       every position counts as inside. This is checked before the site lookup:
+       office employees legitimately have no store, and a missing store must not
+       be treated as "outside the fence" and block their clock-in. */
+    if (emp.geoFenceEnabled === false) {
+      return { inside: true, distance: 0, site: emp.siteId ? getSite(emp.siteId) : null, enforced: false };
+    }
+    const site = emp.siteId ? getSite(emp.siteId) : null;
+    if (!site) return { inside: false, distance: null, site: null, enforced: false };
     const distance = haversine(lat, lng, site.lat, site.lng);
-    return { inside: distance <= site.radius, distance, site };
+    return { inside: distance <= site.radius, distance, site, enforced: true };
+  }
+
+  /* ---------- employee lifecycle ----------
+     Derived, never stored: New → Registration → Documents → Approval →
+     Onboarding → Active. Each step is gated by data that already exists, so the
+     rail can't claim a stage the record hasn't actually reached. */
+  function getLifecycle(emp) {
+    if (!emp) return { stage: 'new', index: 0, stages: LIFECYCLE_STAGES, label: 'New Employee' };
+    const docs = emp.documents || {};
+    const docsDone = REQUIRED_DOC_KEYS.every((k) => docs[k] && docs[k].status && docs[k].status !== 'missing');
+    const kycDone = !!(emp.aadhaarMasked && emp.panMasked && emp.bankVerified);
+    let stage;
+    if (emp.status === 'active' && emp.joiningDate) stage = 'active';
+    else if (emp.approvalStatus === 'approved') stage = 'onboarding';
+    else if (emp.approvalStatus === 'pending-approval' || emp.approvalStatus === 'rejected') stage = 'approval';
+    else if (docsDone || kycDone) stage = 'documents';
+    else if (emp.name && (emp.phone || emp.email)) stage = 'registered';
+    else stage = 'new';
+    const index = LIFECYCLE_STAGES.findIndex((s) => s.id === stage);
+    return { stage, index, stages: LIFECYCLE_STAGES, label: LIFECYCLE_STAGES[index].label, docsDone, kycDone };
+  }
+
+  /* "New" employees are those who joined recently or have not finished the
+     lifecycle — the population the Employees ▸ New tab is about. */
+  const NEW_JOINER_DAYS = 90;
+  function isNewJoiner(emp) {
+    if (!emp) return false;
+    if (emp.status !== 'active') return emp.status === 'pending';
+    if (!emp.joiningDate) return true;
+    const days = (TODAY - new Date(emp.joiningDate)) / 86400000;
+    return days >= 0 && days <= NEW_JOINER_DAYS;
   }
 
   // Live positions — only employees with a today attendance record carry live GPS
@@ -803,11 +1167,14 @@
 
   window.Store = {
     TODAY,
+    // reference data
+    EMPLOYEE_TYPES, DESIGNATION_LADDERS, ALL_DESIGNATIONS, LIFECYCLE_STAGES, REQUIRED_DOC_KEYS, BLANK_ADDRESS,
     // selectors
     getEmployees, getUsers, getEmployee, getSites, getSite, getSlabs, getSlabTemplates, getSlabTemplate,
     getSales, getAttendance, getRegularisations, getNotifications, getPayrollRun, getLivePositions,
     getHierarchy, getKudos, getDevEvents, isDevAbsent, getTargets, incentiveDetail, resolveSlab, isPresentToday,
     getEmployeeIncentives, getSiteIncentives, getIncentiveUploads, findEmployeeByPhone,
+    getLifecycle, isNewJoiner,
     // hierarchy
     getTeamLeads, getBusinessManagers, getTeamLead, getBusinessManager, getStoreManager,
     getSitesForTeamLead, getSitesForBusinessManager, getReportingChain, setSiteManager,
@@ -815,8 +1182,15 @@
     // logic
     calcIncentive, computePayslip, runPayroll, countAttendance, checkGeofence, haversine,
     evalIncentiveRules, ruleAmount, RULE_CAP,
+    storeTargetIncentive, validateEmail, roleCanSelfApprove,
+    // store targets
+    getStoreTargets, getStoreTarget, getStoreAchievement, getStoreTargetSummary,
+    upsertStoreTarget, deleteStoreTarget,
+    // policies
+    getPolicies, upsertPolicy, deletePolicy, togglePolicy,
     // mutations
     updateEmployee, addEmployee, approveEmployee, rejectEmployee, addAttendance,
+    submitForApproval, setDocumentStatus, updateDesignation, setGeoFence,
     addRegularisation, decideRegularisation, upsertSlab, deleteSlab,
     upsertSlabTemplate, deleteSlabTemplate, assignSiteSlab, assignRegionSlab, assignEmployeeSlab,
     upsertSite, deleteSite, updateSales, markNotificationRead, markAllRead, updateConfig,

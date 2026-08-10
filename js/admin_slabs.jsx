@@ -1,8 +1,12 @@
-/* Incentive Slabs — redesigned as employee-wise incentive manager.
-   Tab 1: Employee Incentives (flat table, one row per incentive per employee)
-   Tab 2: Bulk Upload (CSV, admin/super-admin only)
-   Tab 3: Upload History
-   Advanced: Slab template library (kept for backward compat, collapsible) */
+/* Incentive configuration — no longer a top-level tab.
+
+   "Incentive Slabs" used to sit in the main navigation beside Incentives, which
+   duplicated the same subject. This file now exports IncentiveConfigPanel, which
+   the Incentives page mounts under its Configuration tab:
+
+     Employee rules · Bulk upload · Upload history · Slab template library
+
+   The panel keeps its own sub-tabs; the page owns the heading. */
 
 /* ---- helpers ---- */
 function fmtIncentiveType(type) {
@@ -71,23 +75,31 @@ function SlabTemplateEditor({ tpl, onClose }) {
 }
 
 /* ---- Incentive edit modal for a single employee row ---- */
-function EmpIncentiveEditModal({ emp, onClose }) {
+function EmpIncentiveEditModal({ emp, month = '2026-07', onClose }) {
+  const store = useStore();
   const toast = useToast();
   const [incentives, setIncentives] = useState(() => (emp.incentives || []).map((r) => ({ ...r, id: r.id || 'inc_' + Math.random().toString(36).slice(2, 8) })));
+  const sales = store.getSales(emp.id, month)?.totalSales || 0;
+  const target = store.storeTargetIncentive(emp, month);
   const save = () => {
     Store.updateEmployeeIncentives(emp.id, incentives);
     toast('Incentives saved for ' + emp.name, 'success');
     onClose();
   };
   return (
-    <Modal open onClose={onClose} title={`Incentives — ${emp.name}`}
-      footer={<><Btn onClick={onClose}>Cancel</Btn><Btn variant="primary" onClick={save}>Save</Btn></>}>
+    <Modal open onClose={onClose} size="lg" icon="trending-up"
+      title={`Incentives — ${emp.name}`} subtitle={`${emp.designation} · ${fmtMonth(month)} sales ${fmtINR(sales)}`}
+      footer={<><Btn onClick={onClose}>Cancel</Btn><Btn variant="primary" onClick={save}><Icon name="check" className="w-3.5 h-3.5"/>Save</Btn></>}>
       <div className="space-y-3">
-        <div className="flex items-center gap-2 p-2.5 rounded-lg bg-brand-50 dark:bg-brand-900/20 border border-brand-100 dark:border-brand-800">
-          <Icon name="info" className="w-4 h-4 text-brand-600 shrink-0"/>
-          <div className="text-[12px] text-brand-900 dark:text-brand-100">These incentives are in addition to the store slab assigned to this employee's location.</div>
+        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-brand-50 dark:bg-brand-900/20 border border-brand-100 dark:border-brand-800">
+          <Icon name="info" className="w-4 h-4 text-brand-600 shrink-0 mt-px"/>
+          <div className="text-[12px] text-brand-900 dark:text-brand-100">
+            These rules add to the store slab. The total is then compared against the store-target incentive
+            {target ? ` (${fmtINR(target.payout)} at present)` : ''} — whichever is higher is what the employee is paid.
+          </div>
         </div>
-        <IncentiveEditor incentives={incentives} onChange={setIncentives}/>
+        {/* Amounts are quoted against the employee's real sales for the month. */}
+        <IncentiveEditor incentives={incentives} onChange={setIncentives} sales={sales}/>
       </div>
     </Modal>
   );
@@ -130,10 +142,11 @@ function UploadErrorModal({ upload, onClose }) {
   );
 }
 
-/* ======================== Main SlabsPage ======================== */
-function SlabsPage({ user }) {
+/* ======================== IncentiveConfigPanel ======================== */
+function IncentiveConfigPanel({ user }) {
   const store = useStore();
   const toast = useToast();
+  const { confirm, ConfirmUI } = useConfirm();
   const [tab, setTab] = useState('employees');
   const [editEmp, setEditEmp] = useState(null);
   const [editTpl, setEditTpl] = useState(null);
@@ -285,37 +298,19 @@ function SlabsPage({ user }) {
   };
 
   const TABS = [
-    { id: 'employees', label: 'Employee Incentives', icon: 'users' },
-    ...(canUpload ? [{ id: 'upload', label: 'Bulk Upload', icon: 'file' }] : []),
-    { id: 'history', label: 'Upload History', icon: 'clock' },
+    { id: 'employees', label: 'Employee rules', icon: 'users' },
+    ...(canUpload ? [{ id: 'upload', label: 'Bulk upload', icon: 'file' }] : []),
+    { id: 'history', label: 'Upload history', icon: 'history' },
   ];
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-end justify-between flex-wrap gap-3">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Variable pay · employee-wise</div>
-          <div className="text-xl font-bold text-slate-900 dark:text-white">Incentive Slabs</div>
-          <div className="text-[12px] text-slate-500 mt-0.5">
-            {emps.filter((e) => (e.incentives || []).length > 0).length} employees with custom incentives ·{' '}
-            {emps.reduce((n, e) => n + (e.incentives || []).length, 0)} total rules
-          </div>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <Tabs tabs={TABS} value={tab} onChange={setTab} variant="pill"/>
+        <div className="text-[11.5px] text-slate-500">
+          {emps.filter((e) => (e.incentives || []).length > 0).length} employees with custom rules ·{' '}
+          {emps.reduce((n, e) => n + (e.incentives || []).length, 0)} rules total
         </div>
-      </div>
-
-      {/* Tab bar */}
-      <div className="flex items-center gap-0.5 border-b border-slate-200 dark:border-slate-800">
-        {TABS.map((t) => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`flex items-center gap-1.5 px-4 py-2 text-[13px] font-semibold border-b-2 -mb-px transition ${
-              tab === t.id
-                ? 'border-brand-700 text-brand-800 dark:text-brand-300 dark:border-brand-400'
-                : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}>
-            <Icon name={t.icon} className="w-3.5 h-3.5"/>{t.label}
-          </button>
-        ))}
       </div>
 
       {/* ======================== TAB 1: Employee Incentives ======================== */}
@@ -605,7 +600,11 @@ function SlabsPage({ user }) {
                       <td>
                         <div className="flex gap-1 justify-end">
                           <Btn size="xs" onClick={() => setEditTpl(t)}><Icon name="edit" className="w-3 h-3"/></Btn>
-                          <Btn size="xs" variant="danger" onClick={() => { if (confirm('Delete this template? Stores using it fall back to the company default.')) { Store.deleteSlabTemplate(t.id); toast('Template deleted', 'warn'); } }}><Icon name="trash" className="w-3 h-3"/></Btn>
+                          <Btn size="xs" variant="danger" onClick={async () => {
+                            const ok = await confirm({ title: 'Delete this slab template?', body: 'Stores using it fall back to the company default bands.', confirmLabel: 'Delete template', destructive: true });
+                            if (!ok) return;
+                            Store.deleteSlabTemplate(t.id); toast('Template deleted', 'warn');
+                          }}><Icon name="trash" className="w-3 h-3"/></Btn>
                         </div>
                       </td>
                     </tr>
@@ -623,8 +622,12 @@ function SlabsPage({ user }) {
       {editEmp && <EmpIncentiveEditModal emp={editEmp} onClose={() => setEditEmp(null)}/>}
       {editTpl && <SlabTemplateEditor tpl={editTpl} onClose={() => setEditTpl(null)}/>}
       {viewError && <UploadErrorModal upload={viewError} onClose={() => setViewError(null)}/>}
+      {ConfirmUI}
     </div>
   );
 }
 
-Object.assign(window, { SlabsPage, SlabTemplateEditor, UploadErrorModal, EmpIncentiveEditModal, fmtIncentiveThreshold });
+Object.assign(window, {
+  IncentiveConfigPanel, SlabTemplateEditor, UploadErrorModal, EmpIncentiveEditModal,
+  fmtIncentiveThreshold, fmtIncentiveType, fmtIncentiveValue, tierText,
+});
