@@ -326,11 +326,9 @@ function SlabsPage({ user }) {
               <Icon name="search" className="w-3.5 h-3.5 text-slate-400"/>
               <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search employee, code or location…" className="flex-1 bg-transparent text-[13px] outline-none dark:text-slate-100"/>
             </div>
-            <select value={locFilter} onChange={(e) => { setLocFilter(e.target.value); setPage(0); }}
-              className="h-8 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[12px] text-slate-700 dark:text-slate-200 outline-none">
-              <option value="all">All locations</option>
-              {locations.map((l) => <option key={l} value={l}>{l}</option>)}
-            </select>
+            <SearchSelect value={locFilter} onChange={(v) => { setLocFilter(v); setPage(0); }} className="!w-[180px]"
+              options={[{ value: 'all', label: 'All locations' }, ...locations.map((l) => ({ value: l, label: l }))]}
+              searchPlaceholder="Search location…" emptyLabel="No location matches"/>
             <select value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setPage(0); }}
               className="h-8 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[12px] text-slate-700 dark:text-slate-200 outline-none">
               <option value="all">All types</option>

@@ -111,6 +111,11 @@ function SitesPage({ user }) {
   const staffBySite = useMemo(() => {
     const m = {}; store.getEmployees({ status: 'active' }).forEach((e) => { m[e.siteId] = (m[e.siteId] || 0) + 1; }); return m;
   }, [store.state]);
+  // Cities already on record — offered as a picker, but a new one can still be typed.
+  const cityOptions = useMemo(
+    () => [...new Set(sites.map((s) => s.city).filter(Boolean))].sort().map((c) => ({ value: c, label: c })),
+    [store.state]
+  );
   // Team Lead picker narrows with the zone/region filters so it stays usable at 54 leads.
   const teamLeadsInScope = teamLeads.filter((m) =>
     (zone === 'all' || m.zone === zone) && (region === 'all' || m.region === region));
@@ -200,14 +205,13 @@ function SitesPage({ user }) {
             <option value="all">All zones</option>
             {(hierarchy.zones || []).map((z) => <option key={z} value={z}>{z}</option>)}
           </Select>
-          <Select value={region} onChange={(e) => { setRegion(e.target.value); setTeamLead('all'); setPage(0); }} className="!w-auto">
-            <option value="all">All states</option>
-            {regionsForZone.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
-          </Select>
-          <Select value={teamLead} onChange={(e) => { setTeamLead(e.target.value); setPage(0); }} className="!w-auto">
-            <option value="all">All Team Leads</option>
-            {teamLeadsInScope.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.storeCount})</option>)}
-          </Select>
+          <SearchSelect value={region} onChange={(v) => { setRegion(v); setTeamLead('all'); setPage(0); }} className="!w-[170px]"
+            options={[{ value: 'all', label: 'All states' }, ...regionsForZone.map((r) => ({ value: r.name, label: r.name }))]}
+            searchPlaceholder="Search state…" emptyLabel="No state matches"/>
+          <SearchSelect value={teamLead} onChange={(v) => { setTeamLead(v); setPage(0); }} className="!w-[200px]"
+            options={[{ value: 'all', label: 'All Team Leads' },
+              ...teamLeadsInScope.map((m) => ({ value: m.id, label: m.name, sub: [m.region, `${m.storeCount} stores`].filter(Boolean).join(' · ') }))]}
+            searchPlaceholder="Search Team Lead by name…" emptyLabel="No Team Lead matches"/>
         </div>
         <table className="w-full dense-table text-[13px]">
           <thead><tr><th>Store</th><th>City</th><th>State / Zone</th><th>Store Manager</th><th>Team Lead</th><th>Business Mgr</th><th>Incentive slab</th><th className="text-right">Staff</th><th></th></tr></thead>
@@ -256,29 +260,34 @@ function SitesPage({ user }) {
           <div className="grid grid-cols-2 gap-3">
             <Field label="Store code"><Input value={editing.code || ''} onChange={(e) => setEditing({ ...editing, code: e.target.value })} placeholder="A001"/></Field>
             <Field label="Store name"><Input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="Mumbai-Juhu"/></Field>
-            <Field label="City"><Input value={editing.city} onChange={(e) => setEditing({ ...editing, city: e.target.value })}/></Field>
+            <Field label="City">
+              <SearchSelect value={editing.city || ''} onChange={(v) => setEditing({ ...editing, city: v })} allowCustom
+                options={cityOptions} placeholder="Select or type a city…" searchPlaceholder="Search city…"
+                emptyLabel="No city on record — type to add"/>
+            </Field>
             <Field label="Type"><Select value={editing.type} onChange={(e) => setEditing({ ...editing, type: e.target.value })}><option value="store">Retail store</option><option value="service-centre">Service centre</option></Select></Field>
             <Field label="Zone"><Select value={editing.zone || ''} onChange={(e) => setEditing({ ...editing, zone: e.target.value })}><option value="">—</option>{(hierarchy.zones || []).map((z) => <option key={z} value={z}>{z}</option>)}</Select></Field>
             <Field label="Region"><Select value={editing.region || ''} onChange={(e) => setEditing({ ...editing, region: e.target.value })}><option value="">—</option>{(hierarchy.regions || []).filter((r) => !editing.zone || r.zone === editing.zone).map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}</Select></Field>
             <Field label="Store Manager" className="col-span-2"
               hint={editing.id ? 'Picked from technicians posted to this store — they keep clocking in and being paid as field staff.' : 'Save the store first, then assign staff to it before naming a Store Manager.'}>
-              <Select value={editing.managerId || ''} disabled={!editing.id || storeStaff.length === 0}
-                onChange={(e) => setEditing({ ...editing, managerId: e.target.value })}>
-                <option value="">{storeStaff.length === 0 ? '— No staff posted to this store yet —' : '— Unassigned —'}</option>
-                {storeStaff.map((e) => <option key={e.id} value={e.id}>{e.name} · {e.code}</option>)}
-              </Select>
+              <SearchSelect value={editing.managerId || ''} disabled={!editing.id || storeStaff.length === 0}
+                onChange={(v) => setEditing({ ...editing, managerId: v })}
+                placeholder={storeStaff.length === 0 ? '— No staff posted to this store yet —' : '— Unassigned —'}
+                searchPlaceholder="Search staff by name or code…" emptyLabel="No staff matches"
+                options={[{ value: '', label: storeStaff.length === 0 ? '— No staff posted to this store yet —' : '— Unassigned —' },
+                  ...storeStaff.map((e) => ({ value: e.id, label: e.name, sub: e.code, keywords: e.code }))]}/>
             </Field>
             <Field label="Team Lead" hint={`Covers multiple stores · ${teamLeadOptions.length} available${editing.zone || editing.region ? ' in scope' : ''}`}>
-              <Select value={editing.teamLeadId || ''} onChange={(e) => setEditing({ ...editing, teamLeadId: e.target.value })}>
-                <option value="">— Unassigned —</option>
-                {teamLeadOptions.map((m) => <option key={m.id} value={m.id}>{m.name}{m.region ? ` · ${m.region}` : ''} ({m.storeCount} stores)</option>)}
-              </Select>
+              <SearchSelect value={editing.teamLeadId || ''} onChange={(v) => setEditing({ ...editing, teamLeadId: v })}
+                placeholder="— Unassigned —" searchPlaceholder="Search Team Lead by name…" emptyLabel="No Team Lead matches"
+                options={[{ value: '', label: '— Unassigned —' },
+                  ...teamLeadOptions.map((m) => ({ value: m.id, label: m.name, sub: [m.region, `${m.storeCount} stores`].filter(Boolean).join(' · ') }))]}/>
             </Field>
             <Field label="Business Manager" hint={`Zone / multi-state owner · ${bmOptions.length} available${editing.zone ? ' in zone' : ''}`}>
-              <Select value={editing.bmId || ''} onChange={(e) => setEditing({ ...editing, bmId: e.target.value })}>
-                <option value="">— Unassigned —</option>
-                {bmOptions.map((m) => <option key={m.id} value={m.id}>{m.name}{m.zone ? ` · ${m.zone}` : ''} ({m.storeCount} stores)</option>)}
-              </Select>
+              <SearchSelect value={editing.bmId || ''} onChange={(v) => setEditing({ ...editing, bmId: v })}
+                placeholder="— Unassigned —" searchPlaceholder="Search Business Manager by name…" emptyLabel="No Business Manager matches"
+                options={[{ value: '', label: '— Unassigned —' },
+                  ...bmOptions.map((m) => ({ value: m.id, label: m.name, sub: [m.zone ? m.zone + ' zone' : null, `${m.storeCount} stores`].filter(Boolean).join(' · ') }))]}/>
             </Field>
             <div className="col-span-2 -mt-1 flex items-start gap-2 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
               <Icon name="users" className="w-4 h-4 text-slate-400 shrink-0 mt-px"/>
@@ -292,10 +301,10 @@ function SitesPage({ user }) {
               </div>
             </div>
             <Field label="Incentive slab" className="col-span-2">
-              <Select value={editing.slabId || ''} onChange={(e) => setEditing({ ...editing, slabId: e.target.value })}>
-                <option value="">Company default</option>
-                {templates.map((t) => <option key={t.id} value={t.id}>{t.label} {t.raw ? '— ' + t.raw.slice(0, 34) : ''}</option>)}
-              </Select>
+              <SearchSelect value={editing.slabId || ''} onChange={(v) => setEditing({ ...editing, slabId: v })}
+                placeholder="Company default" searchPlaceholder="Search slab…" emptyLabel="No slab matches"
+                options={[{ value: '', label: 'Company default' },
+                  ...templates.map((t) => ({ value: t.id, label: t.label, sub: t.raw || '', keywords: t.raw }))]}/>
             </Field>
             <Field label="Latitude"><Input type="number" step="0.0001" value={editing.lat} onChange={(e) => setEditing({ ...editing, lat: +e.target.value })}/></Field>
             <Field label="Longitude"><Input type="number" step="0.0001" value={editing.lng} onChange={(e) => setEditing({ ...editing, lng: +e.target.value })}/></Field>

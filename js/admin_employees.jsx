@@ -16,6 +16,11 @@ function EmployeeDetailDrawer({ emp: empProp, onClose }) {
   const slabInfo = store.resolveSlab(emp);
   const recentAtt = store.getAttendance({ employeeId: emp.id }).slice(-8).reverse();
   const sites = store.getSites();
+  /* 562 stores — searchable, never a scroll-forever <select>. */
+  const siteOptions = useMemo(() => [
+    { value: '', label: '— Unassigned —' },
+    ...sites.map((s) => ({ value: s.id, label: s.name, sub: [s.city, s.region, s.code].filter(Boolean).join(' · '), keywords: s.code })),
+  ], [store.state]);
 
   const startEdit = () => {
     setDraft({
@@ -105,10 +110,9 @@ function EmployeeDetailDrawer({ emp: empProp, onClose }) {
                 <Field label="Phone"><Input value={draft.phone} onChange={(e) => setD({ phone: e.target.value })} placeholder="+91 98xxx xxxxx"/></Field>
                 <Field label="Email"><Input value={draft.email} onChange={(e) => setD({ email: e.target.value })} placeholder="you@sdc.in"/></Field>
                 <Field label="Assigned store" className="col-span-2">
-                  <Select value={draft.siteId || ''} onChange={(e) => setD({ siteId: e.target.value })}>
-                    <option value="">— Unassigned —</option>
-                    {sites.map((s) => <option key={s.id} value={s.id}>{s.name}{s.city ? ` · ${s.city}` : ''}</option>)}
-                  </Select>
+                  <SearchSelect value={draft.siteId || ''} onChange={(v) => setD({ siteId: v })}
+                    options={siteOptions} placeholder="— Unassigned —" searchPlaceholder="Search store, code or city…"
+                    emptyLabel="No store matches"/>
                 </Field>
                 <Field label="Role">
                   <Select value={draft.role} onChange={(e) => setD({ role: e.target.value })}>
@@ -432,34 +436,32 @@ function EmployeesPage({ user }) {
                   </Select>
                 </Field>
                 <Field label="State">
-                  <Select value={f.region} onChange={(e) => setFilter({ region: e.target.value })}>
-                    <option value="all">All states{f.zone !== 'all' ? ` in ${f.zone}` : ''}</option>
-                    {regionOpts.map((r) => <option key={r} value={r}>{r}</option>)}
-                  </Select>
+                  <SearchSelect value={f.region} onChange={(v) => setFilter({ region: v })}
+                    options={[{ value: 'all', label: `All states${f.zone !== 'all' ? ` in ${f.zone}` : ''}` }, ...regionOpts.map((r) => ({ value: r, label: r }))]}
+                    searchPlaceholder="Search state…" emptyLabel="No state matches"/>
                 </Field>
                 <Field label="City">
-                  <Select value={f.city} onChange={(e) => setFilter({ city: e.target.value })}>
-                    <option value="all">All cities ({cityOpts.length})</option>
-                    {cityOpts.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </Select>
+                  <SearchSelect value={f.city} onChange={(v) => setFilter({ city: v })}
+                    options={[{ value: 'all', label: `All cities (${cityOpts.length})` }, ...cityOpts.map((c) => ({ value: c, label: c }))]}
+                    searchPlaceholder="Search city…" emptyLabel="No city matches"/>
                 </Field>
                 <Field label="Team Lead">
-                  <Select value={f.teamLead} onChange={(e) => setFilter({ teamLead: e.target.value })}>
-                    <option value="all">All Team Leads ({teamLeadOpts.length})</option>
-                    {teamLeadOpts.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.storeCount} stores)</option>)}
-                  </Select>
+                  <SearchSelect value={f.teamLead} onChange={(v) => setFilter({ teamLead: v })}
+                    options={[{ value: 'all', label: `All Team Leads (${teamLeadOpts.length})` },
+                      ...teamLeadOpts.map((m) => ({ value: m.id, label: m.name, sub: [m.region, `${m.storeCount} stores`].filter(Boolean).join(' · ') }))]}
+                    searchPlaceholder="Search Team Lead by name…" emptyLabel="No Team Lead matches"/>
                 </Field>
                 <Field label="Business Manager">
-                  <Select value={f.bm} onChange={(e) => setFilter({ bm: e.target.value })}>
-                    <option value="all">All Business Managers ({bmOpts.length})</option>
-                    {bmOpts.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                  </Select>
+                  <SearchSelect value={f.bm} onChange={(v) => setFilter({ bm: v })}
+                    options={[{ value: 'all', label: `All Business Managers (${bmOpts.length})` },
+                      ...bmOpts.map((m) => ({ value: m.id, label: m.name, sub: [m.zone ? m.zone + ' zone' : null, `${m.storeCount} stores`].filter(Boolean).join(' · ') }))]}
+                    searchPlaceholder="Search Business Manager by name…" emptyLabel="No Business Manager matches"/>
                 </Field>
                 <Field label="Store" hint={`${storeOpts.length} store${storeOpts.length !== 1 ? 's' : ''} in current scope`}>
-                  <Select value={f.siteId} onChange={(e) => setFilter({ siteId: e.target.value })}>
-                    <option value="all">All stores</option>
-                    {storeOpts.map((s) => <option key={s.id} value={s.id}>{s.name} · {s.city}</option>)}
-                  </Select>
+                  <SearchSelect value={f.siteId} onChange={(v) => setFilter({ siteId: v })}
+                    options={[{ value: 'all', label: 'All stores' },
+                      ...storeOpts.map((s) => ({ value: s.id, label: s.name, sub: [s.city, s.code].filter(Boolean).join(' · '), keywords: s.code }))]}
+                    searchPlaceholder="Search store, code or city…" emptyLabel="No store matches"/>
                 </Field>
               </FilterPopover>
             )}

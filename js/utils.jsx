@@ -246,6 +246,147 @@ function Textarea({ className = '', ...props }) {
   return <textarea className={`w-full px-2.5 py-1.5 text-[13px] border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-brand-500 min-h-[70px] ${className}`} {...props}/>;
 }
 
+// ---------- SearchSelect ----------
+/* Type-ahead replacement for <Select> wherever the choices already exist in the
+   database — employees, Team Leads, Business Managers, stores, cities. With 562
+   stores and 490 staff a native <select> means scrolling forever, so here the
+   user types two or three letters instead.
+
+   options: [{ value, label, sub, keywords }]  ·  onChange receives the raw value.
+   The panel is portalled to <body> so a Modal or filter popover never clips it.
+   allowCustom keeps a field usable for values not yet in the database (a store
+   in a brand-new city) — the typed text is offered as its own option. */
+function SearchSelect({
+  value, onChange, options = [], placeholder = 'Select…',
+  searchPlaceholder = 'Type to search…', emptyLabel = 'No matches',
+  disabled = false, className = '', allowCustom = false,
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const [active, setActive] = useState(0);
+  const [box, setBox] = useState(null);
+  const anchorRef = useRef(null);
+  const panelRef = useRef(null);
+  const inputRef = useRef(null);
+
+  const val = value == null ? '' : String(value);
+  const selected = options.find((o) => String(o.value) === val)
+    || (allowCustom && val ? { value: val, label: val } : null);
+
+  const matches = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    if (!ql) return options;
+    const hits = options.filter((o) => `${o.label || ''} ${o.sub || ''} ${o.keywords || ''}`.toLowerCase().includes(ql));
+    if (allowCustom && !options.some((o) => String(o.label).toLowerCase() === ql)) {
+      return [{ value: q.trim(), label: `Use "${q.trim()}"`, sub: 'Not in the list yet — add it' }, ...hits];
+    }
+    return hits;
+  }, [q, options, allowCustom]);
+
+  const place = useCallback(() => {
+    if (anchorRef.current) setBox(anchorRef.current.getBoundingClientRect());
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    place();
+    const onDown = (e) => {
+      if ((anchorRef.current && anchorRef.current.contains(e.target)) ||
+          (panelRef.current && panelRef.current.contains(e.target))) return;
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown, true);
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    const t = setTimeout(() => inputRef.current && inputRef.current.focus(), 0);
+    return () => {
+      document.removeEventListener('mousedown', onDown, true);
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+      clearTimeout(t);
+    };
+  }, [open, place]);
+
+  const openPanel = () => { if (!disabled) { setQ(''); setActive(0); setOpen(true); } };
+  const pick = (o) => { onChange(o.value); setOpen(false); setQ(''); setActive(0); };
+
+  const onKey = (e) => {
+    if (e.key === 'ArrowDown')      { e.preventDefault(); setActive((a) => Math.min(a + 1, matches.length - 1)); }
+    else if (e.key === 'ArrowUp')   { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+    else if (e.key === 'Enter')     { e.preventDefault(); if (matches[active]) pick(matches[active]); }
+    else if (e.key === 'Escape')    { e.preventDefault(); setOpen(false); }
+  };
+
+  // Drop upwards when the panel would run off the bottom of the viewport.
+  const PANEL_H = 280;
+  const width = box ? Math.max(box.width, 240) : 240;
+  const dropUp = box && (window.innerHeight - box.bottom) < PANEL_H && box.top > (window.innerHeight - box.bottom);
+  const style = box ? {
+    position: 'fixed', zIndex: 100, width,
+    left: Math.max(8, Math.min(box.left, window.innerWidth - width - 8)),
+    top: dropUp ? undefined : box.bottom + 4,
+    bottom: dropUp ? window.innerHeight - box.top + 4 : undefined,
+  } : null;
+
+  return (
+    <div className="relative">
+      <div ref={anchorRef} role="button" tabIndex={disabled ? -1 : 0} aria-haspopup="listbox" aria-expanded={open}
+        onClick={() => (open ? setOpen(false) : openPanel())}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') { e.preventDefault(); openPanel(); } }}
+        className={`w-full h-8 px-2 flex items-center gap-1.5 text-[13px] border rounded-md transition ${
+          disabled
+            ? 'border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/50 text-slate-400 cursor-not-allowed'
+            : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 dark:text-slate-100 cursor-pointer hover:border-slate-400 dark:hover:border-slate-600'
+        } ${open ? 'ring-2 ring-brand-500 border-brand-500' : ''} ${className}`}>
+        <span className={`flex-1 min-w-0 truncate text-left ${selected ? '' : 'text-slate-400'}`}>
+          {selected ? selected.label : placeholder}
+        </span>
+        <Icon name="chevron-down" className="w-3 h-3 text-slate-400 shrink-0"/>
+      </div>
+
+      {open && box && ReactDOM.createPortal(
+        <div ref={panelRef} style={style}
+          className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-pop overflow-hidden anim-in">
+          <div className="flex items-center gap-1.5 h-8 px-2 border-b border-slate-100 dark:border-slate-800">
+            <Icon name="search" className="w-3.5 h-3.5 text-slate-400 shrink-0"/>
+            <input ref={inputRef} value={q} onKeyDown={onKey}
+              onChange={(e) => { setQ(e.target.value); setActive(0); }}
+              placeholder={searchPlaceholder}
+              className="flex-1 min-w-0 bg-transparent text-[13px] outline-none dark:text-slate-100"/>
+            {q && (
+              <button type="button" onMouseDown={(e) => e.preventDefault()}
+                onClick={() => { setQ(''); setActive(0); if (inputRef.current) inputRef.current.focus(); }}
+                className="text-slate-400 hover:text-slate-600 shrink-0"><Icon name="x" className="w-3.5 h-3.5"/></button>
+            )}
+          </div>
+          <div className="max-h-[220px] overflow-auto py-1">
+            {matches.length === 0 && <div className="px-3 py-4 text-[12px] text-slate-500 text-center">{emptyLabel}</div>}
+            {matches.map((o, i) => {
+              const isSel = String(o.value) === val;
+              return (
+                <button key={String(o.value)} type="button"
+                  ref={i === active ? (el) => { if (el) el.scrollIntoView({ block: 'nearest' }); } : null}
+                  onMouseEnter={() => setActive(i)} onClick={() => pick(o)}
+                  className={`w-full text-left px-2.5 py-1.5 flex items-center gap-2 ${i === active ? 'bg-brand-50 dark:bg-brand-900/30' : ''}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-[12.5px] truncate ${isSel ? 'font-bold text-brand-800 dark:text-brand-200' : 'font-semibold text-slate-800 dark:text-slate-100'}`}>{o.label}</div>
+                    {o.sub && <div className="text-[10.5px] text-slate-500 truncate">{o.sub}</div>}
+                  </div>
+                  {isSel && <Icon name="check" className="w-3.5 h-3.5 text-brand-600 shrink-0"/>}
+                </button>
+              );
+            })}
+          </div>
+          {options.length > 12 && (
+            <div className="px-2.5 py-1 border-t border-slate-100 dark:border-slate-800 text-[10px] text-slate-400 bg-slate-50 dark:bg-slate-800/50">
+              {matches.length} of {options.length} · type to narrow
+            </div>
+          )}
+        </div>, document.body)}
+    </div>
+  );
+}
+
 // ---------- Empty ----------
 function Empty({ icon = 'info', title, hint, action }) {
   return (
@@ -302,6 +443,6 @@ function useConfirm() {
 // Expose to global scope for other Babel scripts
 Object.assign(window, {
   fmtINR, fmtDate, fmtDateTime, fmtTime, fmtMonth, useStore, useToast, ToastProvider, ToastCtx,
-  Icon, Btn, Badge, Card, Avatar, StatCard, Modal, Field, Input, Select, Textarea, Empty,
+  Icon, Btn, Badge, Card, Avatar, StatCard, Modal, Field, Input, Select, SearchSelect, Textarea, Empty,
   downloadCSV, ROLE_LABEL, useConfirm,
 });

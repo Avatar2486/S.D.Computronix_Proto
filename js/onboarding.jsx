@@ -187,9 +187,9 @@ function OnboardingWizard({ open, onClose, onSubmitted }) {
           <Field label="Date of birth"><Input type="date" value={data.dob} onChange={(e) => set({ dob: e.target.value })}/></Field>
           <Field label="Gender"><Select value={data.gender} onChange={(e) => set({ gender: e.target.value })}><option>Male</option><option>Female</option><option>Other</option></Select></Field>
           <Field label="Assign to site">
-            <Select value={data.siteId} onChange={(e) => set({ siteId: e.target.value })}>
-              {Store.getSites().map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </Select>
+            <SearchSelect value={data.siteId} onChange={(v) => set({ siteId: v })}
+              options={Store.getSites().map((s) => ({ value: s.id, label: s.name, sub: [s.city, s.region, s.code].filter(Boolean).join(' · '), keywords: s.code }))}
+              placeholder="Select a store…" searchPlaceholder="Search store, code or city…" emptyLabel="No store matches"/>
           </Field>
           <Field label="Residential address" className="col-span-2"><Textarea value={data.addr} onChange={(e) => set({ addr: e.target.value })} placeholder="Flat / Street / City / PIN"/></Field>
         </div>

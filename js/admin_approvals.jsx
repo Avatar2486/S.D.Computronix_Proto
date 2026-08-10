@@ -203,9 +203,10 @@ function ApprovalsPage({ user }) {
 
                 <div className="flex items-center gap-2 mt-3 flex-wrap">
                   <div className="text-[11px] text-slate-500">Assign to site:</div>
-                  <Select className="!w-auto" defaultValue={emp.siteId} onChange={(e) => Store.updateEmployee(emp.id, { siteId: e.target.value })}>
-                    {store.getSites().map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </Select>
+                  <SearchSelect className="!w-[240px]" value={emp.siteId || ''}
+                    onChange={(v) => Store.updateEmployee(emp.id, { siteId: v })}
+                    options={store.getSites().map((s) => ({ value: s.id, label: s.name, sub: [s.city, s.region, s.code].filter(Boolean).join(' · '), keywords: s.code }))}
+                    placeholder="Select a store…" searchPlaceholder="Search store, code or city…" emptyLabel="No store matches"/>
                   <div className="ml-auto flex gap-2">
                     <Btn variant="danger" size="sm" onClick={() => setRejecting(emp)}><Icon name="x" className="w-3.5 h-3.5"/>Reject</Btn>
                     <Btn variant="success" size="sm" onClick={() => approve(emp)}><Icon name="check" className="w-3.5 h-3.5"/>Approve & generate offer</Btn>
