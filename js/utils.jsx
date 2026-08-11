@@ -738,13 +738,20 @@ const ROLE_SHORT = {
 /* Single source of truth for "may this role do this?".
    The UI hides actions rather than showing them disabled, so a Team Lead never
    sees a payroll button they cannot press. */
+/* Pay is split into two permissions on purpose.
+
+     salary.view — HR and Admin. HR runs payroll, so they have to see the
+                   figure; a Team Lead has no reason to know what the people
+                   in their store are paid, so they never see it at all.
+     salary.edit — Admin only. Setting someone's pay is the decision, and it
+                   stays with the role that owns approvals. */
 const PERMISSIONS = {
   'admin':          ['*'],
   'hr-manager':     ['employee.view','employee.create','employee.edit','employee.submit','document.upload','designation.edit','geofence.edit',
-                     'salary.edit','attendance.view','attendance.decide','payroll.view','incentive.view','incentive.edit','target.view','target.edit',
+                     'salary.view','attendance.view','attendance.decide','payroll.view','incentive.view','incentive.edit','target.view','target.edit',
                      'site.view','policy.view','policy.edit','report.view','kudos.send'],
   /* Team Lead: read their store, recognise their people, nothing that writes to
-     a personnel record or decides a correction. */
+     a personnel record, decides a correction, or reveals pay. */
   'site-manager':   ['employee.view','attendance.view','incentive.view','target.view','site.view','policy.view','report.view','kudos.send'],
   'field-employee': ['policy.view'],
 };

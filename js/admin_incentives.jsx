@@ -521,7 +521,7 @@ function IncentiveByStore({ user, month }) {
 }
 
 /* ---------------- Page shell ---------------- */
-function IncentivesPage({ user }) {
+function IncentivesPage({ user, navArg }) {
   const [tab, setTab] = useState('dashboard');
   const [month, setMonth] = useState('2026-07');
 
@@ -530,6 +530,11 @@ function IncentivesPage({ user }) {
     { id: 'stores',    label: 'By store',      icon: 'building' },
     ...(can(user, 'incentive.edit') ? [{ id: 'config', label: 'Configuration', icon: 'settings' }] : []),
   ];
+
+  // Opened from a sidebar sub-item: go straight to that tab.
+  useEffect(() => {
+    if (navArg && navArg.tab && TABS.some((t) => t.id === navArg.tab)) setTab(navArg.tab);
+  }, [navArg && navArg._n]);
 
   return (
     <div className="space-y-4">

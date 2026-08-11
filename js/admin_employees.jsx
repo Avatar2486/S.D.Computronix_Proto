@@ -186,6 +186,10 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
 
   const canEdit = can(user, 'employee.edit');
   const canApprove = isSuperAdmin(user);
+  /* Pay is a separate axis from the rest of the record: HR sees it because
+     they run payroll, only an Admin sets it, and a Team Lead sees none of it. */
+  const canSeePay = can(user, 'salary.view');
+  const canSetPay = can(user, 'salary.edit');
 
   const sites = store.getSites();
   const siteOptions = useMemo(() => [
@@ -227,9 +231,8 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
       siteId: draft.siteId || null,
       currentAddress: formatAddress(draft.address),
     });
-    if (nextSalary !== (emp.baseSalary || 0)) {
-      if (can(user, 'salary.edit')) Store.setSalary(emp.id, nextSalary, user.id, 'Edited from the employee record');
-      else toast('Salary unchanged — only HR and Admin can revise pay', 'warn');
+    if (canSetPay && nextSalary !== (emp.baseSalary || 0)) {
+      Store.setSalary(emp.id, nextSalary, user.id, 'Edited from the employee record');
     }
     toast('Employee details updated', 'success');
     setEditing(false);
@@ -245,7 +248,7 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
     { id: 'profile',   label: 'Profile',    icon: 'user' },
     { id: 'education', label: 'Education',  icon: 'graduation', badge: (emp.education || []).length },
     { id: 'documents', label: 'Documents',  icon: 'file' },
-    { id: 'work',      label: 'Attendance & pay', icon: 'wallet' },
+    { id: 'work',      label: canSeePay ? 'Attendance & pay' : 'Attendance', icon: 'wallet' },
     { id: 'settings',  label: 'Settings',   icon: 'settings' },
   ];
 
@@ -351,10 +354,13 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
                     options={siteOptions} placeholder="— Unassigned —" searchPlaceholder="Search store, code or city…" emptyLabel="No store matches"/>
                 </Field>
                 <Field label="Joining date"><Input type="date" value={draft.joiningDate || ''} onChange={(e) => setD({ joiningDate: e.target.value })}/></Field>
-                <Field label="Base salary (₹ / month)" hint={can(user, 'salary.edit') ? 'Changes are recorded in the salary history' : 'HR and Admin only'}>
-                  <Input type="number" min="0" step="500" value={draft.baseSalary} disabled={!can(user, 'salary.edit')}
-                    onChange={(e) => setD({ baseSalary: e.target.value })}/>
-                </Field>
+                {canSeePay && (
+                  <Field label="Base salary (₹ / month)"
+                    hint={canSetPay ? 'Changes are recorded in the salary history' : 'Read-only — only an Admin can revise pay'}>
+                    <Input type="number" min="0" step="500" value={draft.baseSalary} disabled={!canSetPay}
+                      onChange={(e) => setD({ baseSalary: e.target.value })}/>
+                  </Field>
+                )}
                 <Field label="Aadhaar (masked)"><Input value={draft.aadhaarMasked} onChange={(e) => setD({ aadhaarMasked: e.target.value })} placeholder="XXXX-XXXX-4321"/></Field>
                 <Field label="PAN (masked)"><Input value={draft.panMasked} onChange={(e) => setD({ panMasked: e.target.value })} placeholder="ABXXX7845N"/></Field>
                 <label className="flex items-center gap-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200 cursor-pointer self-end pb-1">
@@ -384,7 +390,7 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
                   ['Joined', emp.joiningDate ? fmtDate(emp.joiningDate, { year: true }) : 'Not yet', 'calendar'],
                   ['Aadhaar', emp.aadhaarMasked || '—', 'shield'],
                   ['PAN', emp.panMasked || '—', 'shield'],
-                  ['Base salary', fmtINR(emp.baseSalary), 'wallet'],
+                  ...(canSeePay ? [['Base salary', fmtINR(emp.baseSalary), 'wallet']] : []),
                   ['Bank', emp.bankVerified ? 'Verified ✓' : 'Not verified', 'wallet'],
                   ['Store', site ? site.name : (isOffice ? 'Head office' : 'Unassigned'), 'building'],
                   ['Zone / State', site ? `${site.zone || '—'} · ${site.region || '—'}` : '—', 'map'],
@@ -530,11 +536,13 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
           {/* ---------------- Attendance & pay ---------------- */}
           {tab === 'work' && (
             <div className="space-y-4">
+              {/* Net pay is salary plus incentive, so it is behind the same
+                  permission as salary; incentive on its own is not. */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                 <StatCard label="Present (Jul)" value={`${payslip.presentDays}/${payslip.workingDays}`} icon="check-circle" tone="green"/>
                 <StatCard label="Sales (Jul)" value={fmtINR(sales?.totalSales || 0)} icon="chart" tone="brand"/>
                 <StatCard label="Incentive (Jul)" value={fmtINR(inc.payout)} sub={inc.winner === 'target' ? 'Store target basis' : 'Slab basis'} icon="trending-up" tone="green"/>
-                <StatCard label="Net pay (Jul)" value={fmtINR(payslip.netPay)} icon="wallet" tone="brand"/>
+                {canSeePay && <StatCard label="Net pay (Jul)" value={fmtINR(payslip.netPay)} icon="wallet" tone="brand"/>}
               </div>
 
               <Card title="Recent attendance" bodyClass="p-0">
@@ -570,8 +578,8 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
           {/* ---------------- Settings ---------------- */}
           {tab === 'settings' && (
             <div className="space-y-3">
-              {/* Compensation — HR and Admin set pay; every change is stamped. */}
-              {can(user, 'salary.edit') && <SalaryCard emp={emp} user={user}/>}
+              {/* Compensation — HR reads it, only an Admin revises it. */}
+              {canSeePay && <SalaryCard emp={emp} user={user}/>}
 
               {/* Bank details — three self-service changes, then Admin only. */}
               <BankDetailsCard emp={emp} user={user}/>
@@ -659,18 +667,24 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
 }
 
 /* ---- Compensation ----
-   Salary is HR and Admin work — `salary.edit`, which a Team Lead does not
-   hold. Every revision is appended to the record rather than overwriting it,
-   so the figure payroll used last month is still traceable. */
+   Two permissions, not one. HR holds `salary.view` because they run payroll
+   and have to see the figure; only an Admin holds `salary.edit`, because
+   setting someone's pay is the decision rather than the bookkeeping. A Team
+   Lead holds neither, so this card never renders for them.
+
+   Every revision is appended rather than overwriting, so the figure payroll
+   used last month stays traceable. */
 function SalaryCard({ emp, user }) {
   const store = useStore();
   const toast = useToast();
+  const mayEdit = can(user, 'salary.edit');
   const [editing, setEditing] = useState(false);
   const [amount, setAmount] = useState(emp.baseSalary || 0);
   const [note, setNote] = useState('');
   const history = (emp.salaryHistory || []).slice().reverse();
 
   const save = () => {
+    if (!mayEdit) { toast('Only an Admin can revise salary', 'error'); return; }
     const v = Math.round(+amount || 0);
     if (v <= 0) { toast('Enter a monthly salary above zero', 'error'); return; }
     if (v === (emp.baseSalary || 0)) { setEditing(false); return; }
@@ -681,7 +695,9 @@ function SalaryCard({ emp, user }) {
 
   return (
     <Card title="Compensation" bodyClass="p-3"
-      right={editing ? null : <Btn size="xs" onClick={() => { setAmount(emp.baseSalary || 0); setEditing(true); }}><Icon name="edit" className="w-3 h-3"/>Edit salary</Btn>}>
+      right={editing ? null : (mayEdit
+        ? <Btn size="xs" onClick={() => { setAmount(emp.baseSalary || 0); setEditing(true); }}><Icon name="edit" className="w-3 h-3"/>Edit salary</Btn>
+        : <Badge tone="slate"><Icon name="lock" className="w-3 h-3"/>Admin sets pay</Badge>)}>
       {editing ? (
         <div className="space-y-2.5">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -1055,6 +1071,9 @@ function EmployeeDirectory({ user, list, onOpen, emptyTitle, emptyHint }) {
   const pages = Math.ceil(list.length / PER) || 1;
   const pageList = list.slice(page * PER, page * PER + PER);
   const siteById = useMemo(() => Object.fromEntries(store.getSites().map((s) => [s.id, s])), [store.state]);
+  // A Team Lead has no reason to know what their store's people are paid, so
+  // the column is absent rather than blanked.
+  const showSalary = can(user, 'salary.view');
 
   return (
     <Card noBody>
@@ -1066,7 +1085,7 @@ function EmployeeDirectory({ user, list, onOpen, emptyTitle, emptyHint }) {
               <th className="hidden xl:table-cell">Team Lead</th>
               <th>Stage</th><th>Status</th>
               <th className="hidden lg:table-cell">Geo-fence</th>
-              <th className="text-right">Salary</th><th/>
+              {showSalary && <th className="text-right">Salary</th>}<th/>
             </tr>
           </thead>
           <tbody>
@@ -1104,12 +1123,12 @@ function EmployeeDirectory({ user, list, onOpen, emptyTitle, emptyHint }) {
                   <td className="hidden lg:table-cell">
                     <Badge tone={e.geoFenceEnabled ? 'green' : 'slate'}>{e.geoFenceEnabled ? 'On' : 'Off'}</Badge>
                   </td>
-                  <td className="text-right font-semibold text-slate-800 dark:text-slate-100">{fmtINR(e.baseSalary)}</td>
+                  {showSalary && <td className="text-right font-semibold text-slate-800 dark:text-slate-100">{fmtINR(e.baseSalary)}</td>}
                   <td><Icon name="chevron-right" className="w-4 h-4 text-slate-400"/></td>
                 </tr>
               );
             })}
-            {list.length === 0 && <tr><td colSpan={10}><Empty title={emptyTitle} hint={emptyHint}/></td></tr>}
+            {list.length === 0 && <tr><td colSpan={showSalary ? 10 : 9}><Empty title={emptyTitle} hint={emptyHint}/></td></tr>}
           </tbody>
         </table>
       </div>
@@ -1125,6 +1144,7 @@ function EmployeesPage({ user, navArg }) {
   const [selected, setSelected] = useState(null);
   const [openWizard, setOpenWizard] = useState(false);
   const isSiteMgr = roleOf(user) === 'site-manager';
+  const canSeeSalary = can(user, 'salary.view');
   const hierarchy = store.getHierarchy();
 
   /* Arriving from global search or a dashboard alert: land on the tab that
@@ -1245,8 +1265,11 @@ function EmployeesPage({ user, navArg }) {
 
   const activeList = tab === 'existing' ? existing : newcomers;
 
+  /* The export honours the same permission as the table — a Team Lead cannot
+     download the salary column they are not shown on screen. */
   const exportCSV = () => downloadCSV(`employees_${tab}.csv`, [
-    ['Code','Name','Designation','Type','Stage','Phone','Email','Store','City','State','Zone','Store Manager','Team Lead','Business Manager','Geo-fence','Status','Aadhaar','PAN','Base'],
+    ['Code','Name','Designation','Type','Stage','Phone','Email','Store','City','State','Zone','Store Manager','Team Lead','Business Manager','Geo-fence','Status','Aadhaar','PAN',
+      ...(canSeeSalary ? ['Base'] : [])],
     ...activeList.map((e) => {
       const s = siteById[e.siteId] || {};
       const mgr = s.managerId ? store.getEmployee(s.managerId) : null;
@@ -1255,7 +1278,8 @@ function EmployeesPage({ user, navArg }) {
         s.name || '', s.city || '', s.region || '', s.zone || '',
         mgr ? mgr.name : '', s.cm || '', s.bm || '',
         e.geoFenceEnabled ? 'Enabled' : 'Disabled',
-        e.status, e.aadhaarMasked, e.panMasked, e.baseSalary];
+        e.status, e.aadhaarMasked, e.panMasked,
+        ...(canSeeSalary ? [e.baseSalary] : [])];
     }),
   ]);
 

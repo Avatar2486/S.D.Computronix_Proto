@@ -373,29 +373,62 @@ function TopBar({ user, onSwitch, dark, setDark, onReset, viewMode, setViewMode,
      Regularisation             → Attendance ▸ tab
      Incentive Slabs            → Incentives ▸ Configuration
 
-   `section` groups items under a heading; `sub` lists the tabs a section owns so
-   the sidebar can advertise them without becoming a second navigation system. */
+   `section` groups items under a heading. `sub` lists the tabs a section owns,
+   and every one of them is a real link: each entry carries the `id` of the tab
+   on that page, so clicking it navigates and switches the tab in one step
+   rather than being a label you then have to go and click again. */
 const NAV_ITEMS = [
   { id: 'overview',  section: 'Workspace',  label: 'Dashboard',    icon: 'home',        roles: ['admin','hr-manager','site-manager'] },
 
   { id: 'employees', section: 'People',     label: 'Employees',    icon: 'users',       roles: ['admin','hr-manager','site-manager'],
     // Onboarding is an HR/Admin queue, so it is not advertised to a Team Lead.
-    sub: (role) => (role === 'site-manager' ? ['Existing', 'New'] : ['Existing', 'New', 'Onboarding']),
+    sub: (role) => [
+      { id: 'existing', label: 'Existing' },
+      { id: 'new', label: 'New' },
+      ...(role === 'site-manager' ? [] : [{ id: 'onboarding', label: 'Onboarding' }]),
+    ],
     badge: (s) => s.getEmployees({ status: 'pending' }).length },
   { id: 'attendance', section: 'People',    label: 'Attendance',   icon: 'calendar',    roles: ['admin','hr-manager','site-manager'],
-    sub: ['Overview', 'Daily', 'Monthly', 'Regularization'], badge: (s) => s.getRegularisations({ status: 'pending' }).length },
+    sub: [
+      { id: 'overview', label: 'Overview' },
+      { id: 'daily', label: 'Daily' },
+      { id: 'monthly', label: 'Monthly log' },
+      { id: 'regularization', label: 'Regularization' },
+    ],
+    badge: (s) => s.getRegularisations({ status: 'pending' }).length },
   { id: 'appreciation', section: 'People',  label: 'Appreciation', icon: 'award',       roles: ['admin','hr-manager','site-manager'] },
 
+  /* Payroll's three blocks are stacked cards rather than tabs, so these scroll
+     to the block instead of switching one. */
   { id: 'payroll',   section: 'Compensation', label: 'Payroll',    icon: 'wallet',      roles: ['admin','hr-manager'],
-    sub: ['Payroll', 'Travel Allowance', 'Incentive'] },
-  { id: 'incentives', section: 'Compensation', label: 'Incentives', icon: 'trending-up', roles: ['admin','hr-manager','site-manager'] },
+    sub: [
+      { id: 'run', label: 'Payroll run' },
+      { id: 'travel', label: 'Travel Allowance' },
+      { id: 'incentive', label: 'Incentive' },
+    ] },
+  { id: 'incentives', section: 'Compensation', label: 'Incentives', icon: 'trending-up', roles: ['admin','hr-manager','site-manager'],
+    sub: (role) => [
+      { id: 'dashboard', label: 'Dashboard' },
+      { id: 'stores', label: 'By store' },
+      ...(role === 'site-manager' ? [] : [{ id: 'config', label: 'Configuration' }]),
+    ] },
 
-  { id: 'sites',     section: 'Operations', label: 'Client Sites', icon: 'building',    roles: ['admin','hr-manager'], sub: ['Store Targets'] },
+  { id: 'sites',     section: 'Operations', label: 'Client Sites', icon: 'building',    roles: ['admin','hr-manager'],
+    sub: [
+      { id: 'stores', label: 'Stores & geo-fences' },
+      { id: 'targets', label: 'Store Targets' },
+    ] },
   { id: 'livemap',   section: 'Operations', label: 'Live Map',     icon: 'map',         roles: ['admin','hr-manager','site-manager'] },
-  { id: 'reports',   section: 'Operations', label: 'Reports',      icon: 'chart',       roles: ['admin','hr-manager','site-manager'] },
+  { id: 'reports',   section: 'Operations', label: 'Reports',      icon: 'chart',       roles: ['admin','hr-manager','site-manager'],
+    sub: (role) => [
+      { id: 'attendance', label: 'Attendance' },
+      ...(role === 'site-manager' ? [] : [{ id: 'payroll', label: 'Payroll' }]),
+      { id: 'incentive', label: 'Incentive' },
+      { id: 'deployment', label: 'Deployment' },
+    ] },
 ];
 
-function SideBar({ nav, setNav, user, mobileOpen, onCloseMobile }) {
+function SideBar({ nav, navArg, setNav, user, mobileOpen, onCloseMobile }) {
   const store = useStore();
   const items = NAV_ITEMS.filter((n) => n.roles.includes(roleOf(user)));
   const sections = items.reduce((acc, i) => {
@@ -409,7 +442,7 @@ function SideBar({ nav, setNav, user, mobileOpen, onCloseMobile }) {
   const activeMembers = store.getEmployees({ status: 'active' }).filter((e) => store.isPresentToday(e)).length;
   const breaches = store.getLivePositions().filter((p) => !p.inside).length;
 
-  const nav$ = (id) => { setNav(id); onCloseMobile && onCloseMobile(); };
+  const nav$ = (id, arg) => { setNav(id, arg); onCloseMobile && onCloseMobile(); };
 
   return (
     <>
@@ -429,7 +462,9 @@ function SideBar({ nav, setNav, user, mobileOpen, onCloseMobile }) {
                   const subs = typeof i.sub === 'function' ? i.sub(roleOf(user)) : i.sub;
                   return (
                     <div key={i.id}>
-                      <button data-tour={`nav-${i.id}`} onClick={() => nav$(i.id)}
+                      {/* Clicking the section itself opens its first tab, so
+                          the highlighted sub-item always matches the page. */}
+                      <button data-tour={`nav-${i.id}`} onClick={() => nav$(i.id, subs && subs.length ? { tab: subs[0].id } : null)}
                         className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[13px] font-medium transition ${active ? 'bg-brand-50 text-brand-800 dark:bg-brand-900/30 dark:text-brand-200' : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'}`}>
                         <Icon name={i.icon} className={`w-4 h-4 shrink-0 ${active ? 'text-brand-700 dark:text-brand-300' : 'text-slate-500 dark:text-slate-400'}`}/>
                         <span className="flex-1 text-left truncate">{i.label}</span>
@@ -438,9 +473,21 @@ function SideBar({ nav, setNav, user, mobileOpen, onCloseMobile }) {
                       {/* Show a section's tabs only while you are in it. */}
                       {active && subs && subs.length > 0 && (
                         <div className="ml-[22px] mt-0.5 mb-1 pl-2.5 border-l border-slate-200 dark:border-slate-700 space-y-0.5">
-                          {subs.map((s) => (
-                            <div key={s} className="text-[11px] text-slate-500 dark:text-slate-400 py-0.5">{s}</div>
-                          ))}
+                          {subs.map((s) => {
+                            /* The current tab is only known once the page has
+                               been told which one to open, so the first entry
+                               is highlighted until something else is picked. */
+                            const current = (navArg && navArg.tab) || subs[0].id;
+                            const on = current === s.id;
+                            return (
+                              <button key={s.id} onClick={() => nav$(i.id, { tab: s.id })}
+                                className={`w-full text-left text-[11px] py-0.5 px-1.5 -ml-1.5 rounded transition ${
+                                  on ? 'text-brand-700 dark:text-brand-300 font-semibold bg-brand-50/70 dark:bg-brand-900/25'
+                                     : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'}`}>
+                                {s.label}
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -487,17 +534,17 @@ function AdminApp({ user, splitMode, nav, navArg, setNav, mobileNavOpen, setMobi
       case 'attendance':   return <AttendancePage user={user} navArg={arg}/>;
       case 'livemap':      return <LiveMapPage user={user}/>;
       case 'payroll':      return <PayrollPage user={user} navArg={arg}/>;
-      case 'incentives':   return <IncentivesPage user={user}/>;
+      case 'incentives':   return <IncentivesPage user={user} navArg={arg}/>;
       case 'sites':        return <SitesPage user={user} navArg={arg}/>;
       case 'appreciation': return <AppreciationPage user={user}/>;
-      case 'reports':      return <ReportsPage user={user}/>;
+      case 'reports':      return <ReportsPage user={user} navArg={arg}/>;
       default:             return <OverviewPage user={user} onNavigate={setNav}/>;
     }
   })();
 
   return (
     <div className="flex-1 flex min-h-0">
-      <SideBar nav={nav} setNav={setNav} user={user}
+      <SideBar nav={nav} navArg={arg} setNav={setNav} user={user}
         mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)}/>
       <main className="flex-1 min-w-0 overflow-auto bg-slate-50 dark:bg-[#0B0F1A]">
         <div className="p-3 sm:p-4 lg:p-5 min-h-full anim-in" key={nav}>{view}</div>

@@ -460,8 +460,13 @@ function SitesPage({ user, navArg }) {
   const [editing, setEditing] = useState(null);
   const [targetFor, setTargetFor] = useState(null); // { site, period }
   const [q, setQ] = useState('');
-  // A store picked from global search arrives with its name in the filter.
-  useEffect(() => { if (navArg && navArg.search) { setQ(navArg.search); setTab('stores'); } }, [navArg && navArg._n]);
+  /* A store picked from global search arrives with its name in the filter; a
+     sidebar sub-item arrives with the tab it wants opened. */
+  useEffect(() => {
+    if (!navArg) return;
+    if (navArg.search) { setQ(navArg.search); setTab('stores'); }
+    else if (navArg.tab) setTab(navArg.tab);
+  }, [navArg && navArg._n]);
   const [zone, setZone] = useState('all');
   const [region, setRegion] = useState('all');
   const [teamLead, setTeamLead] = useState('all');

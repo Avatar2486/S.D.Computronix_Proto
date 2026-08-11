@@ -128,7 +128,16 @@ function PayrollPage({ user, navArg }) {
   const [selected, setSelected] = useState(null);
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
-  useEffect(() => { if (navArg && navArg.search) { setQ(navArg.search); setPage(0); } }, [navArg && navArg._n]);
+  /* Payroll is three stacked blocks rather than tabs, so a sidebar sub-item
+     scrolls to its block instead of switching a tab. */
+  const blockRefs = { run: useRef(null), travel: useRef(null), incentive: useRef(null) };
+  useEffect(() => {
+    if (!navArg) return;
+    if (navArg.search) { setQ(navArg.search); setPage(0); }
+    if (navArg.tab && blockRefs[navArg.tab] && blockRefs[navArg.tab].current) {
+      blockRefs[navArg.tab].current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [navArg && navArg._n]);
   const emps = store.getEmployees({ status: 'active' });
   const run = store.getPayrollRun(month);
   const payslips = useMemo(() => emps.map((e) => store.computePayslip(e.id, month)), [store.state, month]);
@@ -187,6 +196,7 @@ function PayrollPage({ user, navArg }) {
       </div>
 
       {/* ---- Main payroll container ---- */}
+      <div ref={blockRefs.run} className="scroll-mt-4"/>
       <Card title={`Payslip preview · ${fmtMonth(month)}`} subtitle={run ? `Processed ${fmtDateTime(run.processedAt)} · ${run.count} payslips` : `${filtered.length} employees · not yet processed`} bodyClass="p-0" noBody
         right={<div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5 h-7 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"><Icon name="search" className="w-3.5 h-3.5 text-slate-400"/><input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search…" className="bg-transparent text-[12px] outline-none w-24 sm:w-32 dark:text-slate-100"/></div>
@@ -240,6 +250,7 @@ function PayrollPage({ user, navArg }) {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
 
         {/* 1 · Travel allowance */}
+        <div ref={blockRefs.travel} className="scroll-mt-4">
         <Card noBody
           title="Travel allowance" subtitle="Fixed commute allowance · toggled per employee in their profile"
           right={<Badge tone="green">{eligible.length} eligible</Badge>}>
@@ -304,8 +315,10 @@ function PayrollPage({ user, navArg }) {
             </>
           )}
         </Card>
+        </div>
 
         {/* 2 · Incentive */}
+        <div ref={blockRefs.incentive} className="scroll-mt-4">
         <Card noBody
           title="Incentive" subtitle="Higher of the store-target and slab calculations, per employee"
           right={<Badge tone="green">{payslips.filter((p) => p.incentive > 0).length} earning</Badge>}>
@@ -376,6 +389,7 @@ function PayrollPage({ user, navArg }) {
             </>
           )}
         </Card>
+        </div>
       </div>
 
       {selected && <PayslipModal payslip={selected} emp={store.getEmployee(selected.employeeId)} onClose={() => setSelected(null)}/>}

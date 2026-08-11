@@ -171,7 +171,7 @@ function ReportFilters({ f, set, reset, activeCount }) {
   );
 }
 
-function ReportsPage({ user }) {
+function ReportsPage({ user, navArg }) {
   const store = useStore();
   const [tab, setTab] = useState('attendance');
   const isSiteMgr = user.role === 'site-manager';
@@ -265,12 +265,20 @@ function ReportsPage({ user }) {
     .filter((s) => s.staffCount > 0)
     .sort((a, b) => b.staffCount - a.staffCount);
 
+  /* The payroll report is base salary and net pay, so it follows the same
+     permission as the salary column everywhere else: HR and Admin only. */
+  const canSeePay = can(user, 'salary.view');
   const TABS = [
     { id: 'attendance', label: 'Attendance', icon: 'calendar' },
-    { id: 'payroll',    label: 'Payroll',    icon: 'wallet' },
+    ...(canSeePay ? [{ id: 'payroll', label: 'Payroll', icon: 'wallet' }] : []),
     { id: 'incentive',  label: 'Incentive',  icon: 'trending-up' },
     { id: 'deployment', label: 'Deployment', icon: 'map' },
   ];
+  useEffect(() => { if (tab === 'payroll' && !canSeePay) setTab('attendance'); }, [canSeePay, tab]);
+  // Opened from a sidebar sub-item.
+  useEffect(() => {
+    if (navArg && navArg.tab && TABS.some((t) => t.id === navArg.tab)) setTab(navArg.tab);
+  }, [navArg && navArg._n]);
 
   const exportCurrent = () => {
     if (tab === 'attendance') {
