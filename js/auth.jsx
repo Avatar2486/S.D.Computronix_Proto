@@ -24,9 +24,9 @@ function LoginScreen({ onEnter }) {
   const toast = useToast();
   const users = store.getUsers().concat(store.getEmployees({ status: 'active' }).slice(0, 2));
   const roles = [
-    { role: 'super-admin', title: 'Super Admin', desc: 'Full system access, config, all payroll & reports.', user: store.getUsers().find(u => u.role === 'super-admin'), icon: 'shield', tone: 'from-brand-700 to-brand-900' },
-    { role: 'hr-manager', title: 'HR Manager', desc: 'Employees, onboarding, payroll, attendance — approvals go to Super Admin.', user: store.getUsers().find(u => u.role === 'hr-manager'), icon: 'users', tone: 'from-violet-600 to-violet-800' },
-    { role: 'site-manager', title: 'Team Lead', desc: 'Only your own store — attendance, incentives, appreciation.', user: store.getUsers().find(u => u.role === 'site-manager'), icon: 'building', tone: 'from-emerald-600 to-emerald-800' },
+    { role: 'admin', title: 'Admin', desc: 'Full system access, config, approvals, all payroll & reports.', user: store.getUsers().find(u => u.role === 'admin'), icon: 'shield', tone: 'from-brand-700 to-brand-900' },
+    { role: 'hr-manager', title: 'HR Manager', desc: 'Employees, onboarding, salary, payroll, attendance — approvals go to Admin.', user: store.getUsers().find(u => u.role === 'hr-manager'), icon: 'users', tone: 'from-violet-600 to-violet-800' },
+    { role: 'site-manager', title: 'Team Lead', desc: 'Read-only view of your own store — attendance, incentives, appreciation.', user: store.getUsers().find(u => u.role === 'site-manager'), icon: 'building', tone: 'from-emerald-600 to-emerald-800' },
     { role: 'field-employee', title: 'Employee', desc: 'Mobile app — clock-in, payslips, incentives.', user: store.getEmployee('emp_001'), icon: 'user', tone: 'from-amber-600 to-orange-700' },
   ];
 
@@ -135,7 +135,7 @@ function LoginScreen({ onEnter }) {
               )}
 
               <div className="px-5 pb-5 -mt-1">
-                <button onClick={() => { onEnter({ id: 'demo', name: 'Demo Session', role: 'super-admin', avatarHue: 220 }, { splitDemo: true }); }}
+                <button onClick={() => { onEnter({ id: 'demo', name: 'Demo Session', role: 'admin', avatarHue: 220 }, { splitDemo: true }); }}
                   className="w-full mt-2 flex items-center justify-center gap-2 py-2.5 rounded-lg border border-brand-200 dark:border-brand-900 bg-brand-50 dark:bg-brand-900/30 text-brand-800 dark:text-brand-200 font-semibold text-[13px] hover:bg-brand-100 dark:hover:bg-brand-900/50">
                   <Icon name="sparkle" className="w-4 h-4"/>Enter Split-Screen Demo (Admin + Employee)
                 </button>

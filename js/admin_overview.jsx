@@ -2,23 +2,26 @@
 function MiniLiveMap({ height = 240 }) {
   const store = useStore();
   const ref = useRef(null);
-  const mapRef = useRef(null);
+  const layerRef = useRef(null);
+  if (!hasLeaflet()) return <MapUnavailable height={height}/>;
 
-  useEffect(() => {
-    if (!ref.current || mapRef.current) return;
-    const m = L.map(ref.current, { zoomControl: false, attributionControl: false, dragging: true, scrollWheelZoom: false }).setView([21.5, 78.5], 4);
+  const mapRef = useLeafletMap(ref, (el) => {
+    const m = L.map(el, { zoomControl: false, attributionControl: false, dragging: true, scrollWheelZoom: false }).setView([21.5, 78.5], 4);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { subdomains: 'abcd', maxZoom: 18 }).addTo(m);
-    mapRef.current = m;
-    // resize once container is real
-    setTimeout(() => m.invalidateSize(), 50);
+    // Overlays live in their own group: clearing a group is safe, whereas
+    // removing layers while iterating the map's own layer table skips entries
+    // and leaves stale markers behind.
+    layerRef.current = L.layerGroup().addTo(m);
+    return m;
   }, []);
 
   useEffect(() => {
-    const m = mapRef.current; if (!m) return;
-    // clear existing layers except base tiles
-    m.eachLayer((layer) => { if (!(layer instanceof L.TileLayer)) m.removeLayer(layer); });
+    const m = mapRef.current, layer = layerRef.current;
+    if (!m || !layer) return;
+    layer.clearLayers();
     const positions = store.getLivePositions();
     const bounds = [];
+    const shown = new Set();
     positions.forEach(({ emp, site, lat, lng, inside }) => {
       const color = inside ? '#059669' : '#e11d48';
       const icon = L.divIcon({
@@ -26,14 +29,15 @@ function MiniLiveMap({ height = 240 }) {
         html: `<div style="width:14px;height:14px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 0 2px ${color}55"></div>`,
         iconSize: [14, 14], iconAnchor: [7, 7],
       });
-      L.marker([lat, lng], { icon }).bindTooltip(`${emp.name} · ${site.city}`, { direction: 'top' }).addTo(m);
+      L.marker([lat, lng], { icon }).bindTooltip(`${emp.name} · ${site.city}`, { direction: 'top' }).addTo(layer);
       bounds.push([lat, lng]);
-    });
-    store.getSites().forEach((s) => {
-      L.circle([s.lat, s.lng], { radius: s.radius, color: '#1E40AF', weight: 1, fillColor: '#1E40AF', fillOpacity: 0.06 }).addTo(m);
+      if (!shown.has(site.id)) {
+        shown.add(site.id);
+        L.circle([site.lat, site.lng], { radius: site.radius, color: '#1E40AF', weight: 1, fillColor: '#1E40AF', fillOpacity: 0.06 }).addTo(layer);
+      }
     });
     if (bounds.length) m.fitBounds(bounds, { padding: [20, 20] });
-  }, [store.state]);
+  }, [store.state, mapRef.current]);
 
   return <div ref={ref} className="leaflet-tiny rounded-lg overflow-hidden border border-slate-200 dark:border-slate-800" style={{ height }}/>;
 }
@@ -101,25 +105,26 @@ function PriorityAlerts({ user, onNavigate, isSiteMgr }) {
     id: 'fence_' + p.emp.id, tone: 'red', icon: 'alert', badge: 'Live',
     title: `Geo-fence breach · ${p.emp.name}`,
     detail: `${Math.round(store.checkGeofence(p.emp.id, p.lat, p.lng).distance)}m from ${p.site.city} store`,
-    go: 'livemap', goLabel: 'Live Map',
+    go: 'livemap', goLabel: 'Live Map', arg: { focusEmpId: p.emp.id },
   }));
   if (pendingApprovals.length) alerts.push({
     id: 'approvals', tone: 'brand', icon: 'shield', badge: String(pendingApprovals.length),
     title: 'Employees awaiting approval',
     detail: `${pendingApprovals.length} application${pendingApprovals.length > 1 ? 's' : ''} in the onboarding queue`,
-    go: 'employees', goLabel: 'Review',
+    go: 'employees', goLabel: 'Review', arg: { tab: 'onboarding' },
   });
   if (missingDocs.length) alerts.push({
     id: 'docs', tone: 'amber', icon: 'file', badge: String(missingDocs.length),
     title: 'Incomplete document sets',
     detail: `${missingDocs.length} applicant${missingDocs.length > 1 ? 's are' : ' is'} missing a required proof`,
-    go: 'employees', goLabel: 'Open',
+    go: 'employees', goLabel: 'Open', arg: { tab: 'onboarding' },
   });
   if (pendingReg.length) alerts.push({
     id: 'regs', tone: 'amber', icon: 'calendar', badge: String(pendingReg.length),
     title: 'Regularisation requests',
     detail: `${pendingReg.length} attendance correction${pendingReg.length > 1 ? 's' : ''} awaiting your decision`,
-    go: 'attendance', goLabel: 'Decide',
+    // Decide lands on the Regularization tab itself, not the Attendance overview.
+    go: 'attendance', goLabel: 'Decide', arg: { tab: 'regularization' },
   });
 
   const toneBox = {
@@ -153,7 +158,7 @@ function PriorityAlerts({ user, onNavigate, isSiteMgr }) {
                 <div className="text-[11px] text-slate-500 truncate">{a.detail}</div>
               </div>
               {onNavigate
-                ? <Btn size="xs" onClick={() => onNavigate(a.go)}>{a.goLabel}<Icon name="chevron-right" className="w-3 h-3"/></Btn>
+                ? <Btn size="xs" onClick={() => onNavigate(a.go, a.arg)}>{a.goLabel}<Icon name="chevron-right" className="w-3 h-3"/></Btn>
                 : <Badge tone={a.tone}>{a.badge}</Badge>}
             </div>
           ))}

@@ -215,14 +215,22 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
     if (clash) { toast(`Employee ID ${draft.code} already belongs to ${clash.name}`, 'error'); return; }
     // The email went through the same validation API used at onboarding.
     if (!emailOk) { toast('Fix the email address before saving', 'error'); return; }
+    /* Pay is written through setSalary, never as part of the general patch, so
+       a revision always lands in the salary history rather than silently
+       replacing the figure payroll ran on. */
+    const nextSalary = Math.round(+draft.baseSalary || 0);
+    const { baseSalary, ...rest } = draft;
     Store.updateEmployee(emp.id, {
-      ...draft,
+      ...rest,
       name: draft.name.trim(), code: draft.code.trim(),
       email: draft.email.trim(),
-      baseSalary: +draft.baseSalary || 0,
       siteId: draft.siteId || null,
       currentAddress: formatAddress(draft.address),
     });
+    if (nextSalary !== (emp.baseSalary || 0)) {
+      if (can(user, 'salary.edit')) Store.setSalary(emp.id, nextSalary, user.id, 'Edited from the employee record');
+      else toast('Salary unchanged — only HR and Admin can revise pay', 'warn');
+    }
     toast('Employee details updated', 'success');
     setEditing(false);
   };
@@ -343,7 +351,10 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
                     options={siteOptions} placeholder="— Unassigned —" searchPlaceholder="Search store, code or city…" emptyLabel="No store matches"/>
                 </Field>
                 <Field label="Joining date"><Input type="date" value={draft.joiningDate || ''} onChange={(e) => setD({ joiningDate: e.target.value })}/></Field>
-                <Field label="Base salary (₹ / month)"><Input type="number" min="0" step="500" value={draft.baseSalary} onChange={(e) => setD({ baseSalary: e.target.value })}/></Field>
+                <Field label="Base salary (₹ / month)" hint={can(user, 'salary.edit') ? 'Changes are recorded in the salary history' : 'HR and Admin only'}>
+                  <Input type="number" min="0" step="500" value={draft.baseSalary} disabled={!can(user, 'salary.edit')}
+                    onChange={(e) => setD({ baseSalary: e.target.value })}/>
+                </Field>
                 <Field label="Aadhaar (masked)"><Input value={draft.aadhaarMasked} onChange={(e) => setD({ aadhaarMasked: e.target.value })} placeholder="XXXX-XXXX-4321"/></Field>
                 <Field label="PAN (masked)"><Input value={draft.panMasked} onChange={(e) => setD({ panMasked: e.target.value })} placeholder="ABXXX7845N"/></Field>
                 <label className="flex items-center gap-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200 cursor-pointer self-end pb-1">
@@ -439,8 +450,9 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
               <div className="text-[12px] text-slate-500">
                 KYC and onboarding proofs.{' '}
                 {canApprove
-                  ? 'As Super Admin you can verify or reject a document directly.'
-                  : 'Documents you upload are marked Pending Approval for a Super Admin to review.'}
+                  ? 'As an Admin you can verify or reject a document directly.'
+                  : 'Documents you upload are marked Pending Approval for an Admin to review.'}{' '}
+                Once Aadhaar or PAN is verified it is locked — the identity proof cannot be swapped afterwards.
               </div>
               <Card noBody>
                 <table className="w-full dense-table text-[12.5px]">
@@ -448,6 +460,9 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
                   <tbody>
                     {MOBILE_DOC_LIST.map((d) => {
                       const rec = docs[d.k] || { status: 'missing' };
+                      /* Aadhaar and PAN are write-once: once verified they are
+                         the record of identity, so Replace goes away. */
+                      const locked = store.isDocumentLocked(emp, d.k);
                       return (
                         <tr key={d.k}>
                           <td>
@@ -456,11 +471,21 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
                           </td>
                           <td><Badge tone={d.required ? 'brand' : 'slate'}>{d.required ? 'Required' : 'Optional'}</Badge></td>
                           <td className="hidden sm:table-cell text-[11px] text-slate-500">{rec.uploadedAt ? fmtDate(rec.uploadedAt, { year: true }) : '—'}</td>
-                          <td><StatusBadge status={rec.status}/></td>
+                          <td>
+                            <div className="flex items-center gap-1.5">
+                              <StatusBadge status={rec.status}/>
+                              {locked && <Icon name="lock" className="w-3 h-3 text-slate-400" title="Verified and locked"/>}
+                            </div>
+                          </td>
                           <td>
                             <div className="flex items-center gap-1 justify-end">
                               <Btn size="xs" onClick={() => toast(`Previewing ${d.label}`, 'info')}><Icon name="eye" className="w-3 h-3"/></Btn>
                               <Btn size="xs" onClick={() => toast(`Downloading ${d.label}`, 'info')}><Icon name="download" className="w-3 h-3"/></Btn>
+                              {canEdit && !locked && (
+                                <Btn size="xs" onClick={() => toast(`Choose a new file for ${d.label}`, 'info')}>
+                                  <Icon name="upload" className="w-3 h-3"/>{rec.status === 'missing' ? 'Upload' : 'Replace'}
+                                </Btn>
+                              )}
                               {canApprove && rec.status === 'uploaded' && (
                                 <Btn size="xs" variant="success" onClick={() => { Store.setDocumentStatus(emp.id, d.k, 'verified', user.id); toast(`${d.label} verified`, 'success'); }}>
                                   <Icon name="check" className="w-3 h-3"/>Verify
@@ -545,6 +570,12 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
           {/* ---------------- Settings ---------------- */}
           {tab === 'settings' && (
             <div className="space-y-3">
+              {/* Compensation — HR and Admin set pay; every change is stamped. */}
+              {can(user, 'salary.edit') && <SalaryCard emp={emp} user={user}/>}
+
+              {/* Bank details — three self-service changes, then Admin only. */}
+              <BankDetailsCard emp={emp} user={user}/>
+
               {/* Geo-fencing — editable for existing employees, per spec §9 */}
               <Card title="Geo-fencing" bodyClass="p-3"
                 right={<Badge tone={emp.geoFenceEnabled ? 'green' : 'slate'}>{emp.geoFenceEnabled ? 'Enabled' : 'Disabled'}</Badge>}>
@@ -612,7 +643,7 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
                   {emp.approvalStatus === 'approved' && `Approved${emp.approvedAt ? ' on ' + fmtDate(emp.approvedAt, { year: true }) : ''}.`}
                   {emp.approvalStatus === 'pending-approval' && (canApprove
                     ? 'Awaiting your decision — use "Approve employee" below, or reject from the Onboarding tab.'
-                    : 'Awaiting Super Admin approval. Only a Super Admin can clear this queue.')}
+                    : 'Awaiting Admin approval. Only an Admin can clear this queue.')}
                   {emp.approvalStatus === 'rejected' && `Rejected${emp.rejectedAt ? ' on ' + fmtDate(emp.rejectedAt, { year: true }) : ''}. ${emp.rejectionReason || ''}`}
                 </div>
               </Card>
@@ -624,6 +655,151 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
       {designationOpen && <DesignationModal emp={emp} user={user} onClose={() => setDesignationOpen(false)}/>}
       <OfferLetterModal emp={emp} open={offerOpen} onClose={() => setOfferOpen(false)}/>
     </>
+  );
+}
+
+/* ---- Compensation ----
+   Salary is HR and Admin work — `salary.edit`, which a Team Lead does not
+   hold. Every revision is appended to the record rather than overwriting it,
+   so the figure payroll used last month is still traceable. */
+function SalaryCard({ emp, user }) {
+  const store = useStore();
+  const toast = useToast();
+  const [editing, setEditing] = useState(false);
+  const [amount, setAmount] = useState(emp.baseSalary || 0);
+  const [note, setNote] = useState('');
+  const history = (emp.salaryHistory || []).slice().reverse();
+
+  const save = () => {
+    const v = Math.round(+amount || 0);
+    if (v <= 0) { toast('Enter a monthly salary above zero', 'error'); return; }
+    if (v === (emp.baseSalary || 0)) { setEditing(false); return; }
+    Store.setSalary(emp.id, v, user.id, note.trim());
+    toast(`Salary revised to ${fmtINR(v)} — payroll recomputes from this figure`, 'success');
+    setNote(''); setEditing(false);
+  };
+
+  return (
+    <Card title="Compensation" bodyClass="p-3"
+      right={editing ? null : <Btn size="xs" onClick={() => { setAmount(emp.baseSalary || 0); setEditing(true); }}><Icon name="edit" className="w-3 h-3"/>Edit salary</Btn>}>
+      {editing ? (
+        <div className="space-y-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <Field label="Monthly salary (₹)" hint={`Currently ${fmtINR(emp.baseSalary || 0)}`}>
+              <Input type="number" min="0" step="500" value={amount} onChange={(e) => setAmount(e.target.value)}/>
+            </Field>
+            <Field label="Reason (optional)">
+              <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Annual revision, promotion…"/>
+            </Field>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Btn size="sm" onClick={() => setEditing(false)}>Cancel</Btn>
+            <Btn size="sm" variant="primary" onClick={save}><Icon name="check" className="w-3 h-3"/>Save salary</Btn>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-end gap-2">
+            <div className="text-[20px] font-bold text-slate-900 dark:text-white font-mono">{fmtINR(emp.baseSalary || 0)}</div>
+            <div className="text-[11px] text-slate-500 pb-1">per month, before deductions</div>
+          </div>
+          <div className="text-[11px] text-slate-500 mt-0.5">
+            {history.length} recorded revision{history.length === 1 ? '' : 's'}
+          </div>
+        </>
+      )}
+
+      {history.length > 0 && (
+        <div className="mt-2 space-y-1 border-t border-slate-100 dark:border-slate-800 pt-2">
+          {history.slice(0, 4).map((h, i) => (
+            <div key={i} className="text-[11.5px] text-slate-600 dark:text-slate-300 flex items-center gap-2">
+              <Icon name={h.to >= h.from ? 'arrow-up' : 'chevron-down'} className={`w-3 h-3 shrink-0 ${h.to >= h.from ? 'text-emerald-600' : 'text-rose-500'}`}/>
+              <span className="flex-1 truncate font-mono">
+                {fmtINR(h.from)} → <span className="font-semibold">{fmtINR(h.to)}</span>
+                {h.note ? <span className="font-sans"> · {h.note}</span> : null}
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono shrink-0">{fmtDate(h.at)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ---- Bank details ----
+   The account that receives the salary is the one field worth attacking, so
+   self-service changes are capped. An Admin is the escalation path and is not
+   counted against the cap. */
+function BankDetailsCard({ emp, user }) {
+  const store = useStore();
+  const toast = useToast();
+  const byAdmin = isAdmin(user);
+  const left = store.bankUpdatesLeft(emp);
+  const exhausted = left <= 0;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({ bankAccount: emp.bankAccount || '', bankIfsc: emp.bankIfsc || '', bankName: emp.bankName || '' });
+
+  const save = () => {
+    const res = Store.updateBankDetails(emp.id, {
+      bankAccount: draft.bankAccount.trim(),
+      bankIfsc: draft.bankIfsc.trim().toUpperCase(),
+      bankName: draft.bankName.trim(),
+      // A changed account has to be re-verified before payroll trusts it.
+      bankVerified: false,
+    }, user);
+    if (!res.ok) { toast(res.reason, 'error'); return; }
+    toast(res.byAdmin
+      ? 'Bank details updated by Admin — penny-drop verification required'
+      : `Bank details updated — ${res.remaining} change${res.remaining === 1 ? '' : 's'} left before you must contact Admin`,
+      'success');
+    setEditing(false);
+  };
+
+  return (
+    <Card title="Bank details" bodyClass="p-3"
+      right={
+        <div className="flex items-center gap-1.5">
+          <Badge tone={emp.bankVerified ? 'green' : 'amber'}>{emp.bankVerified ? 'Penny-drop verified' : 'Not verified'}</Badge>
+          {!editing && (byAdmin || !exhausted) && can(user, 'employee.edit') && (
+            <Btn size="xs" onClick={() => setEditing(true)}><Icon name="edit" className="w-3 h-3"/>Change</Btn>
+          )}
+        </div>
+      }>
+      {editing ? (
+        <div className="space-y-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <Field label="Account number"><Input value={draft.bankAccount} onChange={(e) => setDraft((d) => ({ ...d, bankAccount: e.target.value.replace(/\D/g, '').slice(0, 18) }))} placeholder="18 digits max"/></Field>
+            <Field label="IFSC"><Input value={draft.bankIfsc} onChange={(e) => setDraft((d) => ({ ...d, bankIfsc: e.target.value.toUpperCase().slice(0, 11) }))} placeholder="HDFC0001234"/></Field>
+            <Field label="Bank"><Input value={draft.bankName} onChange={(e) => setDraft((d) => ({ ...d, bankName: e.target.value }))} placeholder="HDFC Bank"/></Field>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Btn size="sm" onClick={() => setEditing(false)}>Cancel</Btn>
+            <Btn size="sm" variant="primary" onClick={save}><Icon name="check" className="w-3 h-3"/>Save bank details</Btn>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-[12px]">
+          {[['Account', emp.bankAccount ? '••••' + String(emp.bankAccount).slice(-4) : '—'],
+            ['IFSC', emp.bankIfsc || '—'],
+            ['Bank', emp.bankName || '—']].map(([k, v]) => (
+            <div key={k} className="p-2 rounded-md bg-slate-50 dark:bg-slate-800/50">
+              <div className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">{k}</div>
+              <div className="font-semibold font-mono text-slate-800 dark:text-slate-100 truncate">{v}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className={`mt-2 text-[11.5px] flex items-start gap-1.5 ${exhausted ? 'text-amber-700 dark:text-amber-300' : 'text-slate-500'}`}>
+        <Icon name={exhausted ? 'lock' : 'info'} className="w-3.5 h-3.5 shrink-0 mt-px"/>
+        <span>
+          {exhausted
+            ? `The self-service limit of ${Store.BANK_UPDATE_LIMIT} changes has been used${byAdmin ? '. As an Admin you can still update the account on the employee’s behalf.' : ' — the employee must contact Admin to change these details.'}`
+            : `${emp.bankUpdateCount || 0} of ${Store.BANK_UPDATE_LIMIT} self-service changes used · ${left} left, then Admin approval is required.`}
+        </span>
+      </div>
+    </Card>
   );
 }
 
@@ -742,7 +918,7 @@ function OnboardingQueue({ user, onOpen }) {
         <div className="p-3 rounded-lg bg-brand-50 dark:bg-brand-900/20 border border-brand-200 dark:border-brand-800 flex items-start gap-2.5">
           <Icon name="lock" className="w-4 h-4 text-brand-700 shrink-0 mt-px"/>
           <div className="text-[12px] text-brand-900 dark:text-brand-100">
-            You can add employees and upload their documents, but only a <span className="font-semibold">Super Admin</span> can approve them.
+            You can add employees and upload their documents, but only an <span className="font-semibold">Admin</span> can approve them.
             Records you submit appear here as Pending Approval.
           </div>
         </div>
@@ -861,7 +1037,7 @@ function OnboardingQueue({ user, onOpen }) {
         </Card>
       )}
 
-      {/* Employees can read these during onboarding; HR and Super Admin manage them. */}
+      {/* Employees can read these during onboarding; HR and Admin manage them. */}
       <PolicyLibrary user={user} manage={can(user, 'policy.edit')}/>
 
       <OfferLetterModal emp={offerFor} open={!!offerFor} onClose={() => setOfferFor(null)}/>
@@ -942,14 +1118,27 @@ function EmployeeDirectory({ user, list, onOpen, emptyTitle, emptyHint }) {
   );
 }
 
-function EmployeesPage({ user }) {
+function EmployeesPage({ user, navArg }) {
   const store = useStore();
   const [tab, setTab] = useState('existing');
   const [q, setQ] = useState('');
   const [selected, setSelected] = useState(null);
   const [openWizard, setOpenWizard] = useState(false);
-  const isSiteMgr = user.role === 'site-manager';
+  const isSiteMgr = roleOf(user) === 'site-manager';
   const hierarchy = store.getHierarchy();
+
+  /* Arriving from global search or a dashboard alert: land on the tab that
+     holds the thing being pointed at, with the search box already filled in.
+     "New" is checked first because a fresh joiner is not in the Existing list. */
+  useEffect(() => {
+    if (!navArg) return;
+    if (navArg.tab) setTab(navArg.tab);
+    if (navArg.search) {
+      setQ(navArg.search);
+      const hit = store.state.employees.find((e) => e.name === navArg.search);
+      if (hit && !navArg.tab) setTab(store.isNewJoiner(hit) ? 'new' : 'existing');
+    }
+  }, [navArg && navArg._n]);
 
   const BLANK = { zone: 'all', region: 'all', city: 'all', siteId: 'all', teamLead: 'all', bm: 'all', level: 'all', status: 'all', empType: 'all', designation: 'all' };
   const [f, setF] = useState(BLANK);
@@ -1029,11 +1218,16 @@ function EmployeesPage({ user }) {
   const newcomers = useMemo(() => applyFilters(everyone.filter((e) => store.isNewJoiner(e))), [everyone, f, q]);
   const pendingCount = store.state.employees.filter((e) => e.approvalStatus === 'pending-approval').length;
 
+  /* Onboarding is a queue you act on — create, upload, approve. A Team Lead
+     holds none of those, so the tab is not shown to them at all rather than
+     shown as a wall of buttons they cannot press. */
+  const showOnboarding = can(user, 'employee.create') || can(user, 'document.upload') || isAdmin(user);
   const TABS = [
     { id: 'existing',   label: 'Existing Employees', icon: 'users' },
     { id: 'new',        label: 'New Employees',      icon: 'sparkle', badge: newcomers.length },
-    { id: 'onboarding', label: 'Onboarding',         icon: 'shield',  badge: pendingCount },
+    ...(showOnboarding ? [{ id: 'onboarding', label: 'Onboarding', icon: 'shield', badge: pendingCount }] : []),
   ];
+  useEffect(() => { if (tab === 'onboarding' && !showOnboarding) setTab('existing'); }, [showOnboarding, tab]);
 
   /* Removable chips — one per active filter, so the current scope is always visible. */
   const chips = [];
@@ -1194,4 +1388,5 @@ function EmployeesPage({ user }) {
 Object.assign(window, {
   EmployeesPage, EmployeeDetailModal, EmployeeDirectory, OnboardingQueue,
   LifecycleRail, DesignationModal, RejectReasonModal, FilterPopover,
+  SalaryCard, BankDetailsCard,
 });

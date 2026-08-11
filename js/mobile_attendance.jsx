@@ -41,7 +41,11 @@ function ClockPanel({ emp }) {
 
   const [cameraOpen, setCameraOpen] = useState(false);
   const [captureFor, setCaptureFor] = useState(null); // 'clock-in' | 'clock-out'
-  const [offline, setOffline] = useState(false);
+  /* Offline capture is automatic — the app queues a mark whenever the device
+     has no connection and syncs it when the connection returns. There is no
+     manual switch: asking an employee to declare they are offline was a toggle
+     that only ever produced the wrong state. */
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
   const [queued, setQueued] = useState(0);
 
   const startCapture = (type) => {
@@ -67,7 +71,7 @@ function ClockPanel({ emp }) {
     setCaptureFor(null);
   };
 
-  const syncNow = () => { setQueued(0); setOffline(false); toast('Back online — queued marks synced to server', 'success'); };
+  const syncNow = () => { setQueued(0); toast('Queued marks synced to server', 'success'); };
 
   return (
     <div className="space-y-3">
@@ -84,9 +88,7 @@ function ClockPanel({ emp }) {
             <div className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-200">Online · marks sync in real time</div>
           )}
         </div>
-        {offline
-          ? <Btn size="xs" variant="success" onClick={syncNow}><Icon name="refresh" className="w-3 h-3"/>Sync</Btn>
-          : <Btn size="xs" onClick={() => setOffline(true)}>Go offline</Btn>}
+        {queued > 0 && <Btn size="xs" variant="success" onClick={syncNow}><Icon name="refresh" className="w-3 h-3"/>Sync</Btn>}
       </div>
 
       {/* Geo-fence status card — reads differently when the fence is switched off */}
@@ -165,11 +167,9 @@ function ClockPanel({ emp }) {
 
 function MiniGeoMap({ site, pos, setPos }) {
   const ref = useRef(null);
-  const mapRef = useRef(null);
-  const markerRef = useRef(null);
-  useEffect(() => {
-    if (!ref.current || mapRef.current) return;
-    const m = L.map(ref.current, { zoomControl: false, attributionControl: false }).setView([site.lat, site.lng], 17);
+  if (!hasLeaflet() || !site) return <MapUnavailable height={180}/>;
+  useLeafletMap(ref, (el) => {
+    const m = L.map(el, { zoomControl: false, attributionControl: false }).setView([site.lat, site.lng], 17);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { subdomains: 'abcd' }).addTo(m);
     L.circle([site.lat, site.lng], { radius: site.radius, color: '#1E40AF', fillOpacity: 0.12, weight: 1.5, dashArray: '4,3' }).addTo(m);
     L.marker([site.lat, site.lng], { icon: L.divIcon({ className: '', html: '<div style="background:#1E40AF;color:white;padding:2px 6px;border-radius:3px;font-size:9px;font-weight:600;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,0.3)">📍 Site</div>', iconSize: null }) }).addTo(m);
@@ -178,9 +178,8 @@ function MiniGeoMap({ site, pos, setPos }) {
       icon: L.divIcon({ className: '', html: '<div style="width:18px;height:18px;border-radius:50%;background:#F59E0B;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>', iconSize: [18,18], iconAnchor: [9,9] })
     }).addTo(m);
     marker.on('drag', (e) => { const p = e.target.getLatLng(); setPos({ lat: p.lat, lng: p.lng }); });
-    mapRef.current = m; markerRef.current = marker;
-    setTimeout(() => m.invalidateSize(), 100);
-  }, []);
+    return m;
+  }, [site.id]);
   return <div ref={ref} style={{ height: 180 }}/>;
 }
 
@@ -318,42 +317,121 @@ function HistoryPanel({ emp }) {
   );
 }
 
+/* Regularise, from the employee's side.
+
+   The employee picks the day and then states the times the log should read —
+   the same request an HR user raises from the desktop, so the queue is one
+   shape and approving it rewrites the log either way. The day's actual state
+   is loaded first, so a shift with a clock-in but no clock-out arrives with
+   the in-time already filled and only the missing half to supply. */
 function RegularisePanel({ emp }) {
   const store = useStore();
   const toast = useToast();
   const [date, setDate] = useState('2026-07-15');
+  const [type, setType] = useState('adjust');
   const [reason, setReason] = useState('');
   const [details, setDetails] = useState('');
+
+  const day = store.getDayLog(emp.id, date);
+  const shift = day.shift;
+  const balance = store.getRegularisationBalance(emp.id, date.slice(0, 7));
+
+  const [entry, setEntry] = useState({ in: '', out: '' });
+  // Changing the date reloads that day's real stamps into the form.
+  useEffect(() => { setEntry({ in: day.inTime || '', out: day.outTime || '' }); }, [date, day.inTime, day.outTime]);
+
   const submit = (e) => {
     e.preventDefault();
     if (!reason.trim()) { toast('Please add a reason', 'warn'); return; }
-    Store.addRegularisation({ employeeId: emp.id, date, reason, details });
-    toast('Request submitted for manager approval', 'success');
+    if (type === 'adjust' && !entry.in && !entry.out) { toast('Set at least one clock time', 'warn'); return; }
+    const res = Store.addRegularisation({
+      employeeId: emp.id, date, type,
+      shift: { start: shift.start, end: shift.end, name: shift.name, location: shift.location },
+      entries: type === 'adjust' ? [{ in: entry.in, out: entry.out, location: shift.location }] : [],
+      reason: reason.trim(), details,
+    });
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    toast('Request submitted for HR approval', 'success');
     setReason(''); setDetails('');
   };
-  const myRequests = store.getRegularisations({ employeeId: emp.id });
+
+  const myRequests = [...store.getRegularisations({ employeeId: emp.id })].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const timeBox = (field, fallback) => (
+    entry[field]
+      ? <input type="time" value={entry[field]} onChange={(e) => setEntry((s) => ({ ...s, [field]: e.target.value }))}
+          className="h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-[13px] font-mono dark:text-slate-100"/>
+      : <button type="button" onClick={() => setEntry((s) => ({ ...s, [field]: fallback }))}
+          className="h-9 px-3 rounded-lg bg-rose-500 text-white text-[11px] font-bold tracking-wide">MISSING</button>
+  );
+
   return (
     <div className="space-y-3">
-      <form onSubmit={submit} className="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-3 space-y-2">
+      <form onSubmit={submit} className="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-3 space-y-3">
         <Field label="Date"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)}/></Field>
-        <Field label="Reason"><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Missed clock-in, network issue…"/></Field>
-        <Field label="Details"><Textarea value={details} onChange={(e) => setDetails(e.target.value)} placeholder="Any supporting information"/></Field>
-        <Btn variant="primary" size="lg" className="w-full">Submit request</Btn>
+
+        {/* What the shift was, so the times below mean something */}
+        <div className="flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-900/50">
+          <span className="text-slate-500">{shift.name}</span>
+          <span className="font-mono font-semibold text-slate-700 dark:text-slate-200">{fmtHHMM(shift.start)} – {fmtHHMM(shift.end)}</span>
+        </div>
+
+        <div className="space-y-1.5">
+          {Store.REG_TYPES.map((t) => (
+            <label key={t.id} className="flex items-start gap-2 cursor-pointer">
+              <input type="radio" name="mregtype" checked={type === t.id} onChange={() => setType(t.id)} className="accent-brand-700 w-4 h-4 mt-0.5 shrink-0"/>
+              <span className={`text-[11.5px] leading-snug ${type === t.id ? 'font-semibold text-slate-900 dark:text-white' : 'text-slate-500'}`}>{t.label}</span>
+            </label>
+          ))}
+        </div>
+
+        {type === 'adjust' && (
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1.5">Attendance adjustment</div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Icon name="sign-in" className="w-4 h-4 text-emerald-600 shrink-0"/>
+              {timeBox('in', shift.start)}
+              <Icon name="sign-out" className="w-4 h-4 text-rose-500 shrink-0"/>
+              {timeBox('out', shift.end)}
+            </div>
+            <div className="text-[10px] text-slate-400 mt-1">{shift.location}</div>
+          </div>
+        )}
+
+        <div className={`text-[11px] px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 ${
+          balance.remaining <= 0 ? 'bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-300' : 'bg-slate-50 dark:bg-slate-900/50 text-slate-600 dark:text-slate-300'}`}>
+          <Icon name="info" className="w-3.5 h-3.5 shrink-0"/>
+          Remaining balance: <span className="font-bold">{balance.remaining} of {balance.limit}</span> this month
+        </div>
+
+        <Field label="Reason"><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Missed clock-out, network issue…"/></Field>
+        <Field label="Note"><Textarea value={details} onChange={(e) => setDetails(e.target.value)} placeholder="Enter note"/></Field>
+        <Btn variant="primary" size="lg" className="w-full" disabled={balance.remaining <= 0}>
+          {balance.remaining <= 0 ? 'No requests left this month' : 'Request'}
+        </Btn>
       </form>
+
       <div className="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 overflow-hidden">
         <div className="px-3 py-2 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-100 dark:border-slate-700 text-[12px] font-bold text-slate-800 dark:text-white">Your requests</div>
         {myRequests.length === 0 && <div className="p-4 text-[11px] text-slate-500 text-center">No requests yet.</div>}
-        {myRequests.map((r) => (
-          <div key={r.id} className="p-3 border-b border-slate-100 dark:border-slate-700 last:border-0">
-            <div className="flex items-center justify-between">
-              <div className="text-[12px] font-semibold text-slate-800 dark:text-white">{fmtDate(r.date, { year: true })}</div>
-              {r.status === 'pending' && <Badge tone="amber">Pending</Badge>}
-              {r.status === 'approved' && <Badge tone="green">Approved</Badge>}
-              {r.status === 'rejected' && <Badge tone="red">Rejected</Badge>}
+        {myRequests.map((r) => {
+          const first = (r.entries || [])[0];
+          return (
+            <div key={r.id} className="p-3 border-b border-slate-100 dark:border-slate-700 last:border-0">
+              <div className="flex items-center justify-between">
+                <div className="text-[12px] font-semibold text-slate-800 dark:text-white">{fmtDate(r.date, { year: true })}</div>
+                {r.status === 'pending' && <Badge tone="amber">Pending</Badge>}
+                {r.status === 'approved' && <Badge tone="green">Approved</Badge>}
+                {r.status === 'rejected' && <Badge tone="red">Rejected</Badge>}
+              </div>
+              <div className="text-[11px] text-slate-500 mt-0.5">{r.reason}</div>
+              {first && (
+                <div className="text-[10.5px] font-mono text-slate-400 mt-0.5">
+                  {first.in ? fmtHHMM(first.in) : '—'} → {first.out ? fmtHHMM(first.out) : '—'}
+                </div>
+              )}
             </div>
-            <div className="text-[11px] text-slate-500 mt-0.5">{r.reason}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

@@ -5,6 +5,15 @@
 
 const KUDOS_BADGES = ['Customer Star', 'Perfect Attendance', 'Top Seller', 'Team Player', 'Fast Learner', 'Going the Extra Mile'];
 
+/* Developer-mode warning.
+
+   On the employee's own device this is addressed to them, in the second
+   person, and it does not go away by being dismissed: the only way past it is
+   to switch Developer Mode off and confirm. Written in the third person
+   ("Developer Mode detected on Rahul's device") it read like a report about
+   somebody else, which is exactly the wrong thing to show the person who has
+   to act on it. Admins still get the third-person view — for them it *is* a
+   report about somebody else. */
 function DevModeBanner({ scope = 'admin', emp }) {
   const store = useStore();
   const toast = useToast();
@@ -23,6 +32,23 @@ function DevModeBanner({ scope = 'admin', emp }) {
 
   const firstName = (target.name || 'this user').split(' ')[0];
   const escalated = absent;
+  const self = scope === 'employee';
+
+  const title = self
+    ? (escalated
+        ? 'You have been marked absent — Developer Mode was on twice today'
+        : 'Switch Developer Mode off to continue')
+    : (escalated
+        ? `Auto-marked ABSENT: Developer Mode detected twice today on ${firstName}'s device`
+        : `Warning: Developer Mode detected on ${firstName}'s device`);
+
+  const body = self
+    ? (escalated
+        ? `Developer Mode was detected on your phone twice today, so your attendance for ${today} has been marked absent pending review. Turn Developer Mode off in Settings, then confirm below and speak to your Team Lead.`
+        : `Developer Mode lets an app fake its GPS position, so attendance cannot be trusted while it is on. This is detection ${count} of 2 — one more today and you will be marked absent. Turn it off in Settings ▸ System ▸ Developer options, then confirm below.`)
+    : (escalated
+        ? `Repeated developer-mode detections indicate attendance tampering. ${target.name} (${target.code}) has been auto-marked absent for ${today} pending review.`
+        : `Detection #${count} of the fraud-prevention limit. A second detection today auto-marks ${target.code} absent. Location data may be spoofed.`);
 
   return (
     <div className={`rounded-lg border px-4 py-3 flex items-start gap-3 ${escalated ? 'bg-rose-50 border-rose-300 dark:bg-rose-950/40 dark:border-rose-800' : 'bg-amber-50 border-amber-300 dark:bg-amber-950/30 dark:border-amber-800'}`}>
@@ -30,16 +56,22 @@ function DevModeBanner({ scope = 'admin', emp }) {
         <Icon name={escalated ? 'shield' : 'alert'} className="w-5 h-5"/>
       </div>
       <div className="flex-1 min-w-0">
-        <div className={`text-[13px] font-bold ${escalated ? 'text-rose-800 dark:text-rose-200' : 'text-amber-900 dark:text-amber-200'}`}>
-          {escalated
-            ? `Auto-marked ABSENT: Developer Mode detected twice today on ${firstName}'s device`
-            : `Warning: Developer Mode detected on ${firstName}'s device`}
-        </div>
-        <div className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
-          {escalated
-            ? `Repeated developer-mode detections indicate attendance tampering. ${target.name} (${target.code}) has been auto-marked absent for ${today} pending review.`
-            : `Detection #${count} of the fraud-prevention limit. A second detection today auto-marks ${target.code} absent. Location data may be spoofed.`}
-        </div>
+        <div className={`text-[13px] font-bold ${escalated ? 'text-rose-800 dark:text-rose-200' : 'text-amber-900 dark:text-amber-200'}`}>{title}</div>
+        <div className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5 leading-relaxed">{body}</div>
+
+        {self && (
+          /* The one action available: confirm it is off. Nothing dismisses this
+             banner except clearing the flag, so it cannot be scrolled past. */
+          <div className="mt-2">
+            <Btn size="xs" variant="primary" onClick={() => {
+              Store.clearDevMode(target.id);
+              toast('Thanks — Developer Mode confirmed off. Attendance is trusted again.', 'success');
+            }}>
+              <Icon name="check" className="w-3 h-3"/>I have switched Developer Mode off
+            </Btn>
+          </div>
+        )}
+
         {scope === 'admin' && (
           <div className="flex items-center gap-2 mt-2">
             {!absent && <Btn size="xs" variant="danger" onClick={() => { const r = Store.triggerDevMode(target.id); toast(r.autoAbsent ? `${firstName} auto-marked absent` : `Detection #${r.count} logged`, r.autoAbsent ? 'error' : 'warn'); }}>Simulate re-detection</Btn>}

@@ -333,9 +333,9 @@ function WizardSteps({ steps, step, onJump, furthest }) {
 /* ============================================================================
    OnboardingWizard — the single "add an employee" flow.
 
-   Approval rule (spec §4 / §23): a Super Admin creating a record approves it
+   Approval rule (spec §4 / §23): an Admin creating a record approves it
    outright and the employee goes straight to Active. Anyone else submits it and
-   it sits in the queue as Pending Approval until a Super Admin clears it. The
+   it sits in the queue as Pending Approval until an Admin clears it. The
    footer button, the review panel and the documents step all read the same
    `selfApprove` flag so they can never disagree.
    ========================================================================== */
@@ -462,12 +462,12 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
     });
 
     if (selfApprove) {
-      // Super Admin: approve immediately so the record lands Active with a
+      // Admin: approve immediately so the record lands Active with a
       // joining date and an offer letter ready to issue.
       Store.approveEmployee(emp.id, data.siteId || null);
       toast(`${emp.name} created and approved — offer letter ready`, 'success');
     } else {
-      toast(`${emp.name} submitted for Super Admin approval`, 'success');
+      toast(`${emp.name} submitted for Admin approval`, 'success');
     }
     onSubmitted && onSubmitted(Store.getEmployee(emp.id));
     onClose();
@@ -483,8 +483,8 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
     <Modal open onClose={onClose} size="xl" icon="user"
       title={selfApprove ? 'Add employee' : 'Add employee — submit for approval'}
       subtitle={selfApprove
-        ? 'You are a Super Admin — this record is approved on save.'
-        : `Created by ${actor.name} · a Super Admin must approve before the employee goes active.`}
+        ? 'You are an Admin — this record is approved on save.'
+        : `Created by ${actor.name} · an Admin must approve before the employee goes active.`}
       footer={
         <>
           <label className="flex items-center gap-1.5 text-[11px] text-slate-500 mr-auto cursor-pointer">
@@ -727,8 +727,8 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
             <Icon name={selfApprove ? 'check-circle' : 'clock'} className={`w-4 h-4 shrink-0 mt-px ${selfApprove ? 'text-emerald-600' : 'text-amber-600'}`}/>
             <div className={`text-[12px] ${selfApprove ? 'text-emerald-900 dark:text-emerald-100' : 'text-amber-900 dark:text-amber-100'}`}>
               {selfApprove
-                ? 'As a Super Admin your uploads are verified on save — no document review step.'
-                : 'Documents you upload are marked Pending Approval and reviewed by a Super Admin.'}
+                ? 'As an Admin your uploads are verified on save — no document review step.'
+                : 'Documents you upload are marked Pending Approval and reviewed by an Admin.'}
               {' '}JPG, PNG or PDF · max {DOC_MAX_MB} MB each.
             </div>
           </div>
@@ -788,7 +788,7 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
               <div className="text-[11.5px] text-slate-600 dark:text-slate-300 mt-0.5">
                 {selfApprove
                   ? `${data.name || 'The employee'} goes straight to Active, documents are marked verified, and the digital offer letter becomes available.`
-                  : `${data.name || 'The employee'} will sit at the Approval stage until a Super Admin reviews the application and its documents.`}
+                  : `${data.name || 'The employee'} will sit at the Approval stage until an Admin reviews the application and its documents.`}
               </div>
             </div>
           </div>
@@ -1064,7 +1064,7 @@ function OfferLetterModal({ emp, open, onClose }) {
 
    One library, two audiences. `PolicyLibrary` is the read/download view an
    employee sees during onboarding; the same component in manage mode gives HR
-   and Super Admin add / edit / replace / version / activate controls.
+   and Admin add / edit / replace / version / activate controls.
    ========================================================================== */
 const POLICY_CATEGORIES = ['Policy', 'Handbook', 'Payroll', 'IT', 'Security', 'Compliance', 'Other'];
 

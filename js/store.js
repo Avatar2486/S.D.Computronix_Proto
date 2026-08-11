@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  const LS_KEY = 'sdc_hrms_v5';           // bumped: employee lifecycle, store targets, policies, designations
+  const LS_KEY = 'sdc_hrms_v6';           // bumped: single Admin role, timed regularisation, bank-change limit
   const TODAY = new Date('2026-07-15T10:30:00+05:30'); // demo "today" (mid-month)
   const D = window.SDCData || { sites: [], employees: [], slabTemplates: [], zones: [], regions: [], businessManagers: [], clusterManagers: [], defaultSlabId: null, meta: {} };
 
@@ -28,6 +28,15 @@
     return 2 * R * Math.asin(Math.sqrt(a));
   }
 
+  /* ---------- roles ----------
+     There is one administrative role, `admin`, and any number of people can
+     hold it — the old Super Admin / Admin split is gone. Records written by
+     earlier builds still say 'super-admin', so every read path funnels through
+     `canonicalRole` and the legacy value is upgraded on load. */
+  const LEGACY_ROLE_MAP = { 'super-admin': 'admin' };
+  const canonicalRole = (role) => LEGACY_ROLE_MAP[role] || role || 'field-employee';
+  const isAdminRole = (role) => canonicalRole(role) === 'admin';
+
   /* ---------- reference data ----------
 
      Two structurally different kinds of staff share one employee record:
@@ -35,8 +44,8 @@
        FIELD  — technicians and store managers posted to a client store. They
                 clock in against a geo-fence, earn sales incentives, and their
                 pay is pro-rated on attendance.
-       OFFICE — HR, Admin, Super Admin and other desk staff. No geo-fence, no
-                store, no sales incentive; fixed monthly pay.
+       OFFICE — HR, Admin and other desk staff. No geo-fence, no store, no
+                sales incentive; fixed monthly pay.
 
      `employeeType` drives onboarding requirements, attendance rules and payroll,
      so it is set on every record (defaulting to 'field' for legacy rows). */
@@ -73,15 +82,41 @@
     city: '', district: '', state: '', country: 'India', pincode: '',
   };
 
+  /* Bank details are the one field a fraudster wants to change, so they are
+     self-service only three times; after that the employee has to go to Admin,
+     who can still edit the record directly. */
+  const BANK_UPDATE_LIMIT = 3;
+
+  /* Attendance corrections are rationed the way every HRMS rations them, so the
+     feature cannot be used to paper over habitual absence. */
+  const REG_MONTHLY_LIMIT = 3;
+
+  /* A regularisation is either a time correction (the common case — the
+     employee has the log, it is just wrong or missing) or a catch-all request
+     for everything that is not a clock time. */
+  const REG_TYPES = [
+    { id: 'adjust', label: 'Add/update time entries to adjust attendance logs.',
+      hint: 'Click a time stamp box you would like to adjust and change the time.' },
+    { id: 'other', label: 'Others — raise a request that is not a time correction.',
+      hint: 'On-duty, work from home, field visit or anything else that needs approval without changing a clock time.' },
+  ];
+
+  const DEFAULT_SHIFT = { start: '10:00', end: '19:00', name: 'General Shift' };
+
   /* Fill in every field the newer UI reads so a record seeded before those
      fields existed still renders. Called on seed and on load, which is what
      lets an older persisted state upgrade in place instead of being wiped. */
   function normaliseEmployee(e) {
-    const isOffice = e.employeeType ? e.employeeType === 'office' : e.role !== 'field-employee';
+    const role = canonicalRole(e.role);
+    const isOffice = e.employeeType ? e.employeeType === 'office' : role !== 'field-employee';
     const type = e.employeeType || (isOffice ? 'office' : 'field');
     return {
       ...e,
+      role,
       employeeType: type,
+      // How many times the employee has changed their own bank details.
+      bankUpdateCount: e.bankUpdateCount || 0,
+      salaryHistory: e.salaryHistory || [],
       // Office staff sit at a desk — a geo-fence would only generate false alerts.
       geoFenceEnabled: e.geoFenceEnabled != null ? !!e.geoFenceEnabled : type === 'field',
       designation: e.designation || (type === 'office' ? 'Executive' : e.isStoreManager ? 'Team Lead' : 'Technician'),
@@ -126,8 +161,11 @@
       { id: 'emp_006', code: 'SDC006', name: 'Kavya Reddy',  phone: '+91 98860 55006', email: 'kavya.r@sdc.in',  role: 'field-employee', status: 'active',  siteId: 'site_pun', joiningDate: '2025-12-02', aadhaarMasked: 'XXXX-XXXX-2263', panMasked: 'KLXXX3390M', bankVerified: true, baseSalary: 17000, avatarHue: 300, travelEligible: false, travelAmount: 1500, demo: true, designation: 'Senior Technician', address: addr('301 Kalyani Nagar', 'Pune', 'Pune', 'Maharashtra', '411006') },
       // Pending onboarding
       { id: 'emp_007', code: 'SDC007', name: 'Arjun Mehta',  phone: '+91 98330 66007', email: 'arjun.m@sdc.in',  role: 'field-employee', status: 'pending', siteId: 'site_mum', joiningDate: '', aadhaarMasked: 'XXXX-XXXX-8842', panMasked: 'MNXXX5501Z', bankVerified: true, baseSalary: 15000, avatarHue: 130, travelEligible: false, travelAmount: 0, submittedAt: iso(TODAY), demo: true, designation: 'Technician', approvalStatus: 'pending-approval', submittedBy: 'usr_hr' },
-      // Admin & managers (role picker) — office staff: no store, no geo-fence
-      { id: 'usr_admin', code: 'ADM01', name: 'Neha Kapoor',  phone: '+91 98111 00001', email: 'neha.k@sdc.in',  role: 'super-admin', status: 'active', siteId: null, joiningDate: '2024-01-10', avatarHue: 220, baseSalary: 0, employeeType: 'office', designation: 'Head of Department' },
+      /* Admin & managers (role picker) — office staff: no store, no geo-fence.
+         Two people hold the Admin role: it is a permission level, not a seat,
+         so an organisation can have as many admins as it needs. */
+      { id: 'usr_admin',  code: 'ADM01', name: 'Neha Kapoor',   phone: '+91 98111 00001', email: 'neha.k@sdc.in',  role: 'admin',      status: 'active', siteId: null, joiningDate: '2024-01-10', avatarHue: 220, baseSalary: 0, employeeType: 'office', designation: 'Head of Department' },
+      { id: 'usr_admin2', code: 'ADM02', name: 'Karthik Menon', phone: '+91 98111 00004', email: 'karthik.m@sdc.in', role: 'admin',    status: 'active', siteId: null, joiningDate: '2024-08-05', avatarHue: 265, baseSalary: 0, employeeType: 'office', designation: 'Senior Manager' },
       { id: 'usr_hr',    code: 'HR001', name: 'Rohit Sinha',  phone: '+91 98111 00002', email: 'rohit.s@sdc.in', role: 'hr-manager',  status: 'active', siteId: null, joiningDate: '2024-05-14', avatarHue: 190, baseSalary: 0, employeeType: 'office', designation: 'Manager' },
       { id: 'usr_sm',    code: 'SM001', name: 'Ananya Rao',   phone: '+91 98111 00003', email: 'ananya.r@sdc.in',role: 'site-manager', status: 'active', siteId: 'site_mum', joiningDate: '2024-03-22', avatarHue: 40, baseSalary: 0, employeeType: 'office', designation: 'Assistant Manager' },
     ];
@@ -228,9 +266,27 @@
       { id: 'slab_4', minSales: 200001,   maxSales: null,    payout: 4500, label: 'Top performer' },
     ];
 
+    /* Each request carries the exact times the employee is asking the log to
+       read, so an approval is a data change rather than a note on a file. */
     const regularisations = [
-      { id: uid('reg'), employeeId: 'emp_002', date: '2026-07-07', reason: 'Client visit ran late', details: 'Was at Croma Andheri assisting a customer beyond shift end. Missed clock-out.', status: 'pending', decidedBy: null, decidedAt: null, auditTrail: [{ at: iso(new Date(2026,6,8,9,20)), by: 'emp_002', action: 'submitted' }] },
-      { id: uid('reg'), employeeId: 'emp_003', date: '2026-07-04', reason: 'Network issue at site',  details: 'Mobile network down during clock-in window.', status: 'approved', decidedBy: 'usr_hr', decidedAt: iso(new Date(2026,6,5,11,10)), auditTrail: [{ at: iso(new Date(2026,6,5,8,10)), by: 'emp_003', action: 'submitted' }, { at: iso(new Date(2026,6,5,11,10)), by: 'usr_hr', action: 'approved' }] },
+      { id: uid('reg'), employeeId: 'emp_002', date: '2026-07-07', type: 'adjust',
+        shift: { start: '10:00', end: '19:00', name: 'Flexible Shift', location: 'Croma – Juhu, Mumbai' },
+        entries: [{ in: '10:04', out: '19:35', location: 'Croma – Juhu, Mumbai' }],
+        reason: 'Client visit ran late', details: 'Was at Croma Andheri assisting a customer beyond shift end. Missed clock-out.',
+        status: 'pending', decidedBy: null, decidedAt: null,
+        auditTrail: [{ at: iso(new Date(2026,6,8,9,20)), by: 'emp_002', action: 'submitted' }] },
+      { id: uid('reg'), employeeId: 'emp_003', date: '2026-07-04', type: 'adjust',
+        shift: { start: '10:00', end: '19:00', name: 'Flexible Shift', location: 'Croma – Connaught Place, Delhi' },
+        entries: [{ in: '10:00', out: '19:05', location: 'Croma – Connaught Place, Delhi' }],
+        reason: 'Network issue at site', details: 'Mobile network down during clock-in window.',
+        status: 'approved', decidedBy: 'usr_hr', decidedAt: iso(new Date(2026,6,5,11,10)),
+        auditTrail: [{ at: iso(new Date(2026,6,5,8,10)), by: 'emp_003', action: 'submitted' }, { at: iso(new Date(2026,6,5,11,10)), by: 'usr_hr', action: 'approved' }] },
+      { id: uid('reg'), employeeId: 'emp_001', date: '2026-07-10', type: 'other',
+        shift: { start: '10:00', end: '19:00', name: 'Flexible Shift', location: 'Croma – Juhu, Mumbai' },
+        entries: [],
+        reason: 'On duty — customer site visit', details: 'Full day at a client premises in Thane; no store clock-in possible.',
+        status: 'pending', decidedBy: null, decidedAt: null,
+        auditTrail: [{ at: iso(new Date(2026,6,11,10,5)), by: 'emp_001', action: 'submitted' }] },
     ];
 
     const notifications = [
@@ -821,12 +877,12 @@
 
   /* ---------- approval workflow ----------
 
-     Super Admin creates an employee → the record is approved on the spot.
+     An Admin creates an employee → the record is approved on the spot.
      Anyone else creates one → it enters the queue as 'pending-approval' and a
-     Super Admin has to clear it. `roleCanSelfApprove` is the single place that
+     an Admin has to clear it. `roleCanSelfApprove` is the single place that
      decision is made, so the wizard, the quick-add form and the document
      uploader all behave identically. */
-  const roleCanSelfApprove = (role) => role === 'super-admin';
+  const roleCanSelfApprove = (role) => isAdminRole(role);
 
   function submitForApproval(id, byUserId) {
     const e = getEmployee(id); if (!e) return;
@@ -837,9 +893,68 @@
     persist(); emit();
   }
 
-  /* Document approval mirrors employee approval: an upload by a non-Super-Admin
-     lands as 'uploaded' (pending) and needs review; a Super Admin's upload is
-     verified immediately. */
+  /* ---------- document locking ----------
+     Identity proofs are write-once. Once Aadhaar or PAN has been verified the
+     document is the company's record of who this person is, and letting the
+     holder swap the file afterwards would defeat the verification entirely —
+     so Replace disappears and a correction has to go through Admin. Bank and
+     address proofs stay replaceable because they legitimately change. */
+  const LOCKED_DOC_KEYS = ['aadhaar', 'pan'];
+  function isDocumentLocked(emp, docKey) {
+    if (!LOCKED_DOC_KEYS.includes(docKey)) return false;
+    const docs = (emp && emp.documents) || {};
+    const rec = docs[docKey];
+    if (rec) return rec.status === 'verified';
+    // Legacy records carry only the masked KYC value, which means verified.
+    if (docKey === 'aadhaar') return !!(emp && emp.aadhaarMasked);
+    if (docKey === 'pan') return !!(emp && emp.panMasked);
+    return false;
+  }
+
+  /* ---------- bank details ----------
+     Three self-service changes, then the employee is sent to Admin. Admins
+     bypass the counter because they are the escalation path. */
+  function bankUpdatesLeft(emp) {
+    return Math.max(0, BANK_UPDATE_LIMIT - ((emp && emp.bankUpdateCount) || 0));
+  }
+  function updateBankDetails(empId, patch, byUser) {
+    const e = getEmployee(empId);
+    if (!e) return { ok: false, reason: 'Employee not found', remaining: 0 };
+    const byAdmin = !!byUser && isAdminRole(byUser.role);
+    const remaining = bankUpdatesLeft(e);
+    if (!byAdmin && remaining <= 0) {
+      return { ok: false, remaining: 0,
+        reason: `Bank details can be changed ${BANK_UPDATE_LIMIT} times. Please contact Admin to change them again.` };
+    }
+    Object.assign(e, patch);
+    if (!byAdmin) e.bankUpdateCount = ((e.bankUpdateCount || 0) + 1);
+    e.bankUpdatedAt = iso(new Date());
+    persist(); emit();
+    return { ok: true, remaining: byAdmin ? remaining : bankUpdatesLeft(e), byAdmin };
+  }
+
+  /* ---------- salary ----------
+     HR and Admin may set pay; every change is stamped so the payroll figure can
+     always be traced back to who approved it. */
+  function setSalary(empId, amount, byUserId, note) {
+    const e = getEmployee(empId); if (!e) return null;
+    const from = +e.baseSalary || 0;
+    const to = Math.max(0, Math.round(+amount || 0));
+    if (from === to) return null;
+    e.salaryHistory = (e.salaryHistory || []).concat([{
+      from, to, at: iso(new Date()), by: byUserId || null, note: note || '',
+    }]);
+    e.baseSalary = to;
+    state.notifications.push({ id: uid('ntf'), employeeId: empId, type: 'payroll',
+      message: `Your monthly salary was revised to ₹${to.toLocaleString('en-IN')}.`,
+      read: false, timestamp: iso(new Date()) });
+    persist(); emit();
+    return e.salaryHistory[e.salaryHistory.length - 1];
+  }
+
+  /* Document approval mirrors employee approval: an upload by a non-Admin lands
+     as 'uploaded' (pending) and needs review; an Admin's upload is verified
+     immediately. */
   function setDocumentStatus(empId, docKey, status, by) {
     const e = getEmployee(empId); if (!e) return;
     const docs = { ...(e.documents || {}) };
@@ -967,17 +1082,160 @@
     persist(); emit();
     return full;
   }
+  /* ---------- shifts and the day log ----------
+
+     A regularisation is only meaningful against a shift: "10:11 in, missing
+     out" means nothing until you know the shift ran 10:00–19:00. The shift
+     comes off the assigned store, falling back to the company default for
+     office staff and anyone unassigned. */
+  function getShift(emp) {
+    const site = emp && emp.siteId ? getSite(emp.siteId) : null;
+    if (site && site.shiftStart && site.shiftEnd) {
+      return { start: site.shiftStart, end: site.shiftEnd, name: 'Flexible Shift', location: site.name, siteId: site.id };
+    }
+    return { ...DEFAULT_SHIFT, location: 'Head office', siteId: null };
+  }
+
+  const HHMM = (ts) => {
+    if (!ts) return null;
+    const d = new Date(ts);
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  };
+  // 'HH:MM' on a given YYYY-MM-DD, as a full ISO timestamp.
+  function stampAt(date, hhmm) {
+    const [h, m] = String(hhmm || '00:00').split(':').map(Number);
+    const d = new Date(date + 'T00:00:00');
+    d.setHours(h || 0, m || 0, 0, 0);
+    return iso(d);
+  }
+  const minutesOf = (hhmm) => {
+    const [h, m] = String(hhmm || '0:0').split(':').map(Number);
+    return (h || 0) * 60 + (m || 0);
+  };
+
+  /* One row of the attendance log: what the employee's day actually looks like.
+     `status` is what the grid colours the cell by, and `missing` is what makes
+     the Regularize action worth offering. */
+  function getDayLog(empId, date, opts) {
+    const emp = getEmployee(empId);
+    const shift = getShift(emp);
+    const marks = state.attendance
+      .filter((a) => a.employeeId === empId && a.date === date)
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    /* The imported roster carries monthly present/absent totals but no
+       individual clock stamps. Showing those days as "absent" would contradict
+       the 95% the same person's monthly row reports, so a month with no marks
+       at all reads as "no data" and is not offered for correction — there is
+       no log to correct. `hasMarks` is passed in by the month builder so this
+       costs one scan per month rather than one per day. */
+    const hasMarks = opts && opts.hasMarks !== undefined
+      ? opts.hasMarks
+      : state.attendance.some((a) => a.employeeId === empId && a.date.startsWith(date.slice(0, 7)));
+    const inMark = marks.find((m) => m.type === 'clock-in') || null;
+    const outMark = [...marks].reverse().find((m) => m.type === 'clock-out') || null;
+    const reg = state.regularisations.find((r) => r.employeeId === empId && r.date === date);
+
+    const inTime = inMark ? HHMM(inMark.timestamp) : null;
+    const outTime = outMark ? HHMM(outMark.timestamp) : null;
+    const grossMinutes = inTime && outTime ? Math.max(0, minutesOf(outTime) - minutesOf(inTime)) : 0;
+    const isFuture = date > dateKey(TODAY);
+    const weekend = [0].includes(new Date(date + 'T00:00:00').getDay());
+
+    let status;
+    if (isFuture) status = 'upcoming';
+    else if (weekend) status = 'weekly-off';
+    else if (inTime && outTime) status = minutesOf(inTime) > minutesOf(shift.start) + 15 ? 'late' : 'on-time';
+    else if (inTime || outTime) status = 'incomplete';
+    else if (!hasMarks) status = 'no-data';
+    else status = 'absent';
+
+    const correctable = !isFuture && !weekend && hasMarks;
+    return {
+      date, empId, shift, marks, inMark, outMark, inTime, outTime,
+      grossMinutes, status, weekend, isFuture, hasMarks,
+      missing: correctable && (!inTime || !outTime),
+      regularisation: reg || null,
+      // Only a day that actually went wrong, on a log that actually exists.
+      regularisable: correctable && (!inTime || !outTime || status === 'late'),
+    };
+  }
+
+  function getAttendanceMonth(empId, month /* YYYY-MM */) {
+    const [y, m] = month.split('-').map(Number);
+    const days = new Date(y, m, 0).getDate();
+    const hasMarks = state.attendance.some((a) => a.employeeId === empId && a.date.startsWith(month));
+    const out = [];
+    for (let d = 1; d <= days; d++) {
+      out.push(getDayLog(empId, `${month}-${String(d).padStart(2, '0')}`, { hasMarks }));
+    }
+    return out;
+  }
+
+  /* ---------- regularisation ----------
+
+     A request carries the time entries the employee wants the log to read, so
+     approving it is a data change rather than a note on a file. Requests are
+     rationed per calendar month; the balance is shown before the form is
+     filled in, the way every HRMS does it. */
+  function getRegularisationBalance(empId, month) {
+    const used = state.regularisations.filter((r) =>
+      r.employeeId === empId && r.status !== 'rejected' && String(r.date || '').startsWith(month)).length;
+    return { used, limit: REG_MONTHLY_LIMIT, remaining: Math.max(0, REG_MONTHLY_LIMIT - used), month };
+  }
+
   function addRegularisation(req) {
-    const full = { id: uid('reg'), status: 'pending', decidedBy: null, decidedAt: null, auditTrail: [{ at: iso(new Date()), by: req.employeeId, action: 'submitted' }], ...req };
+    const month = String(req.date || '').slice(0, 7);
+    const balance = getRegularisationBalance(req.employeeId, month);
+    if (balance.remaining <= 0) {
+      return { error: `No requests left for ${month} — the monthly limit is ${REG_MONTHLY_LIMIT}.` };
+    }
+    const full = {
+      id: uid('reg'),
+      type: req.type || 'adjust',
+      entries: (req.entries || []).map((e) => ({ in: e.in || '', out: e.out || '', location: e.location || '' })),
+      shift: req.shift || null,
+      status: 'pending', decidedBy: null, decidedAt: null,
+      auditTrail: [{ at: iso(new Date()), by: req.employeeId, action: 'submitted' }],
+      ...req,
+    };
     state.regularisations.push(full);
     state.notifications.push({ id: uid('ntf'), employeeId: req.employeeId, type: 'regularisation', message: `Regularisation for ${req.date} submitted.`, read: false, timestamp: iso(new Date()) });
     persist(); emit();
     return full;
   }
+
+  /* Approving a time correction writes the requested times into the attendance
+     log. Without this the request would be paperwork: the day would still read
+     "missing" everywhere else in the app. */
+  function applyRegularisation(r) {
+    if (!r || r.type === 'other') return;
+    const emp = getEmployee(r.employeeId); if (!emp) return;
+    const geo = emp.siteId ? getSite(emp.siteId) : null;
+    (r.entries || []).forEach((entry) => {
+      [['in', 'clock-in'], ['out', 'clock-out']].forEach(([field, type]) => {
+        if (!entry[field]) return;
+        const ts = stampAt(r.date, entry[field]);
+        const existing = state.attendance.find((a) => a.employeeId === r.employeeId && a.date === r.date && a.type === type);
+        if (existing) {
+          existing.timestamp = ts;
+          existing.regularised = true;
+        } else {
+          state.attendance.push({
+            id: uid('att'), employeeId: r.employeeId, type, date: r.date, timestamp: ts,
+            latitude: geo ? geo.lat : 0, longitude: geo ? geo.lng : 0,
+            insideGeofence: true, regularised: true, source: 'regularisation',
+          });
+        }
+      });
+    });
+  }
+
   function decideRegularisation(id, decision, by) {
     const r = state.regularisations.find((x) => x.id === id); if (!r) return;
     r.status = decision; r.decidedBy = by; r.decidedAt = iso(new Date());
     r.auditTrail.push({ at: iso(new Date()), by, action: decision });
+    if (decision === 'approved') applyRegularisation(r);
     state.notifications.push({ id: uid('ntf'), employeeId: r.employeeId, type: 'regularisation', message: `Your regularisation for ${r.date} was ${decision}.`, read: false, timestamp: iso(new Date()) });
     persist(); emit();
   }
@@ -1169,12 +1427,18 @@
     TODAY,
     // reference data
     EMPLOYEE_TYPES, DESIGNATION_LADDERS, ALL_DESIGNATIONS, LIFECYCLE_STAGES, REQUIRED_DOC_KEYS, BLANK_ADDRESS,
+    REG_TYPES, REG_MONTHLY_LIMIT, BANK_UPDATE_LIMIT, LOCKED_DOC_KEYS, DEFAULT_SHIFT,
+    canonicalRole, isAdminRole,
     // selectors
     getEmployees, getUsers, getEmployee, getSites, getSite, getSlabs, getSlabTemplates, getSlabTemplate,
     getSales, getAttendance, getRegularisations, getNotifications, getPayrollRun, getLivePositions,
     getHierarchy, getKudos, getDevEvents, isDevAbsent, getTargets, incentiveDetail, resolveSlab, isPresentToday,
     getEmployeeIncentives, getSiteIncentives, getIncentiveUploads, findEmployeeByPhone,
     getLifecycle, isNewJoiner,
+    // attendance log / regularisation
+    getShift, getDayLog, getAttendanceMonth, getRegularisationBalance, HHMM, minutesOf,
+    // document + bank + salary rules
+    isDocumentLocked, bankUpdatesLeft, updateBankDetails, setSalary,
     // hierarchy
     getTeamLeads, getBusinessManagers, getTeamLead, getBusinessManager, getStoreManager,
     getSitesForTeamLead, getSitesForBusinessManager, getReportingChain, setSiteManager,

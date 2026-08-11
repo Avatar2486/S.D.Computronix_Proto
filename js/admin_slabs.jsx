@@ -164,7 +164,7 @@ function IncentiveConfigPanel({ user }) {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
 
-  const canUpload = ['super-admin', 'hr-manager'].includes(user.role);
+  const canUpload = ['admin', 'hr-manager'].includes(roleOf(user));
 
   const emps = store.getEmployees({ status: 'active' });
   const sites = store.getSites();
@@ -492,7 +492,7 @@ function IncentiveConfigPanel({ user }) {
                     ['trending-up', 'Multiple incentives', 'A single employee can appear in multiple rows — each row adds one incentive rule.'],
                     ['target', 'Independent thresholds', 'Every rule that clears its Minimum Sales pays out, and the amounts add up. Rules do not override one another.'],
                     ['refresh', 'Full replace', 'Uploading for an employee replaces all their existing incentive definitions.'],
-                    ['shield', 'Admin only', 'Only Admin and Super Admin can perform bulk uploads.'],
+                    ['shield', 'Admin only', 'Only Admin and HR can perform bulk uploads.'],
                   ].map(([icon, title, desc]) => (
                     <div key={title} className="flex gap-2.5">
                       <div className="w-6 h-6 rounded-md bg-brand-50 dark:bg-brand-900/30 flex items-center justify-center shrink-0">

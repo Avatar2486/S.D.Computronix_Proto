@@ -134,6 +134,9 @@ function Icon({ name, className = 'w-4 h-4', stroke = 1.75 }) {
     'arrow-right': <><path d="M4 12h16M14 6l6 6-6 6" {...p}/></>,
     'layers': <><path d="m12 3 9 5-9 5-9-5 9-5Z" {...p}/><path d="m3 13 9 5 9-5M3 17l9 5 9-5" {...p}/></>,
     'history': <><path d="M3 12a9 9 0 1 0 3-6.7L3 8" {...p}/><path d="M3 4v4h4M12 8v4.5l3 1.5" {...p}/></>,
+    // Arrival / departure arrows for the attendance log — ↙ in, ↗ out.
+    'sign-in':  <><path d="M17 7 7 17" {...p}/><path d="M7 10v7h7" {...p}/></>,
+    'sign-out': <><path d="M7 17 17 7" {...p}/><path d="M10 7h7v7" {...p}/></>,
   };
   return <svg viewBox="0 0 24 24" className={className} aria-hidden>{svgs[name] || null}</svg>;
 }
@@ -218,20 +221,46 @@ function StatCard({ label, value, sub, tone = 'slate', icon }) {
    screen needs to invent its own side panel. */
 const MODAL_SIZES = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl', full: 'max-w-6xl' };
 
+/* Every dialog in the app renders through this, and every one of them is a
+   portal into <body>.
+
+   A `position: fixed` overlay is only viewport-relative while no ancestor
+   establishes a containing block — a transform, filter, backdrop-filter or
+   `will-change` anywhere above it silently re-anchors the dialog to that
+   element, which is how a centred modal ends up pinned to the side of a card.
+   Rendering outside the page tree removes the whole class of bug, and takes
+   overflow clipping and z-index stacking with it. */
 function Modal({ open, onClose, title, subtitle, icon, children, wide, size, footer, bodyClass = 'p-4' }) {
   useEffect(() => {
     if (!open) return;
     const h = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
-    // Freeze the page behind the overlay so a long modal body doesn't scroll it.
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { window.removeEventListener('keydown', h); document.body.style.overflow = prev; };
+    /* Freeze whatever is actually scrolling behind the overlay. The app shell
+       scrolls <main>, not <body>, so locking the body alone does nothing.
+
+       The lock is ref-counted: dialogs stack (an employee record opens the
+       offer letter over itself), and if each one restored the scroll on close
+       the first to unmount would unlock the page while another is still up. */
+    const scrollers = [document.body, ...document.querySelectorAll('main')];
+    if (!window.__modalLocks) window.__modalLocks = 0;
+    if (window.__modalLocks === 0) {
+      window.__modalPrevOverflow = scrollers.map((el) => el.style.overflow);
+      scrollers.forEach((el) => { el.style.overflow = 'hidden'; });
+    }
+    window.__modalLocks += 1;
+    return () => {
+      window.removeEventListener('keydown', h);
+      window.__modalLocks = Math.max(0, window.__modalLocks - 1);
+      if (window.__modalLocks === 0) {
+        const prev = window.__modalPrevOverflow || [];
+        scrollers.forEach((el, i) => { el.style.overflow = prev[i] || ''; });
+      }
+    };
   }, [open, onClose]);
   if (!open) return null;
   const width = MODAL_SIZES[size] || (wide ? MODAL_SIZES.xl : MODAL_SIZES.md);
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 anim-in">
+  const overlay = (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4 anim-in" role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined}>
       <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={onClose} />
       <div className={`relative bg-white dark:bg-slate-900 rounded-xl shadow-pop border border-slate-200 dark:border-slate-800 w-full ${width} max-h-[90vh] flex flex-col`}>
         <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
@@ -253,6 +282,7 @@ function Modal({ open, onClose, title, subtitle, icon, children, wide, size, foo
       </div>
     </div>
   );
+  return ReactDOM.createPortal(overlay, document.body);
 }
 
 // ---------- Input ----------
@@ -489,6 +519,15 @@ const STATUS_TONES = {
   verified:           ['green',  'Verified'],
   uploaded:           ['amber',  'Pending Review'],
   missing:            ['red',    'Missing'],
+  // Attendance log day states
+  'on-time':          ['green',  'On Time'],
+  late:               ['amber',  'Late'],
+  incomplete:         ['amber',  'Incomplete'],
+  absent:             ['red',    'Absent'],
+  'weekly-off':       ['slate',  'Weekly Off'],
+  upcoming:           ['slate',  'Upcoming'],
+  'no-data':          ['slate',  'No log'],
+  regularised:        ['violet', 'Regularised'],
 };
 function StatusBadge({ status, label, className = '' }) {
   const [tone, text] = STATUS_TONES[status] || ['slate', status || '—'];
@@ -674,37 +713,50 @@ function downloadCSV(filename, rows) {
 }
 
 /* ---------- role helpers ----------
-   Five roles, matching how the client staffs the system. Site Manager is the
-   Team Lead seat: they own a store's people but not company-wide settings. */
+
+   Four roles. There used to be an Admin and a Super Admin; they did the same
+   job with different labels, so they are now one `admin` role that any number
+   of people can hold. Records written before the merge still say 'super-admin',
+   so every lookup goes through `roleOf` rather than reading `user.role` raw.
+
+   Site Manager is the Team Lead seat. A Team Lead runs a store's day — they do
+   not create or edit people, and they do not decide attendance corrections;
+   both of those are HR/Admin work. */
+const roleOf = (user) => (Store.canonicalRole ? Store.canonicalRole(user && user.role) : (user && user.role));
+
 const ROLE_LABEL = {
-  'super-admin': 'Super Admin',
+  'admin': 'Admin',
+  'super-admin': 'Admin',       // legacy sessions
   'hr-manager': 'HR Manager',
   'site-manager': 'Team Lead',
   'field-employee': 'Employee',
 };
 const ROLE_SHORT = {
-  'super-admin': 'Super Admin', 'hr-manager': 'HR', 'site-manager': 'Team Lead', 'field-employee': 'Employee',
+  'admin': 'Admin', 'super-admin': 'Admin', 'hr-manager': 'HR', 'site-manager': 'Team Lead', 'field-employee': 'Employee',
 };
 
 /* Single source of truth for "may this role do this?".
    The UI hides actions rather than showing them disabled, so a Team Lead never
    sees a payroll button they cannot press. */
 const PERMISSIONS = {
-  'super-admin':    ['*'],
+  'admin':          ['*'],
   'hr-manager':     ['employee.view','employee.create','employee.edit','employee.submit','document.upload','designation.edit','geofence.edit',
-                     'attendance.view','attendance.decide','payroll.view','incentive.view','incentive.edit','target.view','target.edit',
+                     'salary.edit','attendance.view','attendance.decide','payroll.view','incentive.view','incentive.edit','target.view','target.edit',
                      'site.view','policy.view','policy.edit','report.view','kudos.send'],
-  'site-manager':   ['employee.view','employee.create','employee.submit','document.upload','attendance.view','attendance.decide',
-                     'incentive.view','target.view','site.view','policy.view','report.view','kudos.send'],
+  /* Team Lead: read their store, recognise their people, nothing that writes to
+     a personnel record or decides a correction. */
+  'site-manager':   ['employee.view','attendance.view','incentive.view','target.view','site.view','policy.view','report.view','kudos.send'],
   'field-employee': ['policy.view'],
 };
 function can(user, action) {
   if (!user) return false;
-  const list = PERMISSIONS[user.role] || [];
+  const list = PERMISSIONS[roleOf(user)] || [];
   return list.includes('*') || list.includes(action);
 }
-// Only a Super Admin's own records skip the approval queue.
-const isSuperAdmin = (user) => !!user && user.role === 'super-admin';
+// Only an Admin's own records skip the approval queue.
+const isAdmin = (user) => roleOf(user) === 'admin';
+// Kept under the old name so existing call sites keep reading naturally.
+const isSuperAdmin = isAdmin;
 
 // ---------- confirm dialog ----------
 function useConfirm() {
@@ -732,6 +784,90 @@ const fmtINRShort = (n) => {
   return '₹' + v;
 };
 const pctOf = (a, b) => (!b ? 0 : Math.round((a / b) * 100));
+
+/* ---------- Leaflet mounting ----------
+
+   Leaflet measures its container once, at creation, and lays the tile grid out
+   from that measurement. Every map in this app is created inside a container
+   that is still mid-fade (the page wrapper animates on navigation) and inside a
+   flex column whose height settles a frame later — so the map was measuring a
+   collapsed or offset box and painting its tiles outside the visible area. The
+   result was a map pane that rendered nothing.
+
+   This hook re-measures on the next frame, once the entry animation is over,
+   and thereafter whenever the container changes size. `onReady` runs once with
+   the map instance; the caller keeps its own layer refs. */
+function useLeafletMap(containerRef, factory, deps = []) {
+  const mapRef = useRef(null);
+  useEffect(() => {
+    if (!containerRef.current || mapRef.current) return;
+    if (typeof L === 'undefined' || !L || !L.map) return;
+    const map = factory(containerRef.current);
+    if (!map) return;
+    mapRef.current = map;
+
+    const settle = () => { try { map.invalidateSize(); } catch (e) {} };
+    // Next frame (layout done), after the 200ms page fade, and once more late
+    // for slow tile/font loads — all cheap, and between them nothing is missed.
+    requestAnimationFrame(settle);
+    const timers = [setTimeout(settle, 250), setTimeout(settle, 700)];
+
+    let ro = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(settle);
+      ro.observe(containerRef.current);
+    }
+    window.addEventListener('resize', settle);
+
+    return () => {
+      timers.forEach(clearTimeout);
+      window.removeEventListener('resize', settle);
+      if (ro) ro.disconnect();
+      try { map.remove(); } catch (e) {}
+      mapRef.current = null;
+    };
+  }, deps);
+  return mapRef;
+}
+
+/* Shown in place of a map when Leaflet itself failed to load, so the panel
+   explains itself instead of being a blank rectangle. */
+function MapUnavailable({ height = 240 }) {
+  return (
+    <div style={{ height }} className="flex flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 text-slate-400">
+      <Icon name="map" className="w-6 h-6"/>
+      <div className="text-[11.5px] font-semibold">Map library unavailable</div>
+      <div className="text-[10.5px]">Check the network connection and reload.</div>
+    </div>
+  );
+}
+const hasLeaflet = () => typeof L !== 'undefined' && !!L && !!L.map;
+
+/* ---------- time ---------- */
+/* 'HH:MM' (24h, what <input type="time"> speaks) → '10:11 am' for display. */
+const fmtHHMM = (hhmm) => {
+  if (!hhmm) return '';
+  const [h, m] = String(hhmm).split(':').map(Number);
+  const suffix = h >= 12 ? 'pm' : 'am';
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  return `${hour}:${String(m || 0).padStart(2, '0')} ${suffix}`;
+};
+/* Minutes → '8h 24m', for gross-hours columns. */
+const fmtDuration = (mins) => {
+  const v = Math.max(0, Math.round(mins || 0));
+  return `${Math.floor(v / 60)}h ${String(v % 60).padStart(2, '0')}m`;
+};
+
+/* A clock time the user picks. Native time input so mobile gets its own wheel
+   and the keyboard path stays typeable. */
+function TimeInput({ value, onChange, disabled, className = '', ...rest }) {
+  return (
+    <input type="time" value={value || ''} disabled={disabled}
+      onChange={(e) => onChange && onChange(e.target.value)}
+      className={`h-8 px-2 text-[13px] font-mono border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-60 ${className}`}
+      {...rest}/>
+  );
+}
 
 /* Small horizontal progress bar used in target/achievement cells. */
 function ProgressBar({ value, tone, className = '', height = 6 }) {
@@ -764,6 +900,7 @@ Object.assign(window, {
   fmtINR, fmtINRShort, fmtDate, fmtDateTime, fmtTime, fmtMonth, pctOf, useStore, useToast, ToastProvider, ToastCtx,
   Icon, Btn, Badge, Card, Avatar, StatCard, Modal, Field, Input, Select, SearchSelect, Textarea, Empty,
   Tabs, PageHeader, StatusBadge, STATUS_TONES, FilterBar, FilterChips, PhotoUpload, EmailField,
-  IncentiveAmount, ProgressBar, Pagination,
-  downloadCSV, ROLE_LABEL, ROLE_SHORT, PERMISSIONS, can, isSuperAdmin, useConfirm,
+  IncentiveAmount, ProgressBar, Pagination, TimeInput,
+  useLeafletMap, MapUnavailable, hasLeaflet, fmtHHMM, fmtDuration,
+  downloadCSV, ROLE_LABEL, ROLE_SHORT, PERMISSIONS, can, roleOf, isAdmin, isSuperAdmin, useConfirm,
 });

@@ -452,7 +452,7 @@ function StoreTargetsTab({ user }) {
   );
 }
 
-function SitesPage({ user }) {
+function SitesPage({ user, navArg }) {
   const store = useStore();
   const toast = useToast();
   const { confirm, ConfirmUI } = useConfirm();
@@ -460,6 +460,8 @@ function SitesPage({ user }) {
   const [editing, setEditing] = useState(null);
   const [targetFor, setTargetFor] = useState(null); // { site, period }
   const [q, setQ] = useState('');
+  // A store picked from global search arrives with its name in the filter.
+  useEffect(() => { if (navArg && navArg.search) { setQ(navArg.search); setTab('stores'); } }, [navArg && navArg._n]);
   const [zone, setZone] = useState('all');
   const [region, setRegion] = useState('all');
   const [teamLead, setTeamLead] = useState('all');

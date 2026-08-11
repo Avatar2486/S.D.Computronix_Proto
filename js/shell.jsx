@@ -35,7 +35,185 @@ function PeriodClock() {
   );
 }
 
-function TopBar({ user, onSwitch, dark, setDark, onReset, viewMode, setViewMode, onLogout, onTour, onToggleNav }) {
+/* ---- Global search ----
+
+   What it searches, and what pressing Enter does, was never defined — so here
+   it is, explicitly. Four kinds of thing are indexed:
+
+     People   — name, employee code, email, phone, designation.  → Employees
+     Stores   — store name, code, city, state.                   → Client Sites
+     Policies — title and category of every HR document.         → Employees ▸ Onboarding
+     Screens  — the pages this role can reach, by name.          → that page
+
+   Picking a result navigates to the page that owns it and pre-seeds that
+   page's own filter with the term, so the item you searched for is the thing
+   you land on. Results are scoped to the role: a Team Lead only ever matches
+   their own store's people, and never sees a page they cannot open. */
+function useGlobalSearch(user, query) {
+  const store = useStore();
+  return useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const role = roleOf(user);
+    const isSiteMgr = role === 'site-manager';
+    const digits = q.replace(/\D/g, '');
+    const out = [];
+
+    const people = store.state.employees.filter((e) => (!isSiteMgr || e.siteId === user.siteId) && (
+      (e.name || '').toLowerCase().includes(q) ||
+      (e.code || '').toLowerCase().includes(q) ||
+      (e.email || '').toLowerCase().includes(q) ||
+      (e.designation || '').toLowerCase().includes(q) ||
+      (digits.length >= 4 && (e.phone || '').replace(/\D/g, '').includes(digits))
+    )).slice(0, 6);
+    people.forEach((e) => out.push({
+      id: 'emp_' + e.id, group: 'People', icon: 'user', emp: e,
+      title: e.name, sub: `${e.code} · ${e.designation}${store.getSite(e.siteId) ? ' · ' + store.getSite(e.siteId).city : ''}`,
+      nav: 'employees', arg: { search: e.name },
+    }));
+
+    if (can(user, 'site.view')) {
+      const sites = store.getSites().filter((s) => (!isSiteMgr || s.id === user.siteId) && (
+        (s.name || '').toLowerCase().includes(q) ||
+        (s.code || '').toLowerCase().includes(q) ||
+        (s.city || '').toLowerCase().includes(q) ||
+        (s.region || '').toLowerCase().includes(q)
+      )).slice(0, 5);
+      sites.forEach((s) => out.push({
+        id: 'site_' + s.id, group: 'Stores', icon: 'building',
+        title: s.name, sub: [s.code, s.city, s.region].filter(Boolean).join(' · '),
+        nav: 'sites', arg: { search: s.name },
+      }));
+    }
+
+    store.getPolicies().filter((p) => p.active && (
+      (p.title || '').toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q)
+    )).slice(0, 4).forEach((p) => out.push({
+      id: 'pol_' + p.id, group: 'Policies', icon: 'book',
+      title: p.title, sub: `${p.category} · v${p.version}`,
+      nav: 'employees', arg: { tab: 'onboarding' },
+    }));
+
+    const subsOf = (n) => (typeof n.sub === 'function' ? n.sub(role) : n.sub) || [];
+    NAV_ITEMS.filter((n) => n.roles.includes(role) && (
+      n.label.toLowerCase().includes(q) || subsOf(n).some((s) => s.toLowerCase().includes(q))
+    )).slice(0, 4).forEach((n) => {
+      const subHit = subsOf(n).find((s) => s.toLowerCase().includes(q));
+      out.push({
+        id: 'nav_' + n.id, group: 'Screens', icon: n.icon,
+        title: n.label + (subHit ? ` ▸ ${subHit}` : ''), sub: n.section,
+        nav: n.id, arg: subHit ? { tab: subHit.toLowerCase() } : null,
+      });
+    });
+
+    return out;
+  }, [query, store.state, user]);
+}
+
+function GlobalSearch({ user, onNavigate }) {
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(false);
+  const [cursor, setCursor] = useState(0);
+  const inputRef = useRef(null);
+  const results = useGlobalSearch(user, q);
+
+  useEffect(() => { setCursor(0); }, [q]);
+  // Ctrl/⌘-K from anywhere focuses the field — the shortcut people try first.
+  useEffect(() => {
+    const h = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        inputRef.current && inputRef.current.focus();
+        setOpen(true);
+      }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
+
+  const choose = (r) => {
+    if (!r) return;
+    setOpen(false); setQ('');
+    onNavigate(r.nav, r.arg);
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape') { setOpen(false); e.target.blur(); return; }
+    if (!results.length) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setCursor((c) => (c + 1) % results.length); }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); setCursor((c) => (c - 1 + results.length) % results.length); }
+    if (e.key === 'Enter')     { e.preventDefault(); choose(results[cursor]); }
+  };
+
+  // Group headers without losing the flat index the keyboard cursor walks.
+  let flat = -1;
+
+  return (
+    <div className="hidden lg:block relative">
+      <div className={`flex items-center gap-2 w-56 xl:w-72 h-9 px-2.5 rounded-lg border bg-slate-50 dark:bg-slate-800 transition ${
+        open ? 'border-brand-500 ring-2 ring-brand-500/20' : 'border-slate-200 dark:border-slate-700'}`}>
+        <Icon name="search" className="w-3.5 h-3.5 text-slate-400 shrink-0"/>
+        <input ref={inputRef} value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)} onKeyDown={onKeyDown}
+          className="flex-1 min-w-0 bg-transparent text-[12px] outline-none dark:text-slate-100 placeholder:text-slate-400"
+          placeholder="Search people, stores, policies…"/>
+        {q
+          ? <button onClick={() => { setQ(''); inputRef.current && inputRef.current.focus(); }} className="text-slate-400 hover:text-slate-600 shrink-0"><Icon name="x" className="w-3.5 h-3.5"/></button>
+          : <kbd className="hidden xl:block text-[9px] font-mono text-slate-400 border border-slate-300 dark:border-slate-600 rounded px-1 shrink-0">Ctrl K</kbd>}
+      </div>
+
+      {open && q.trim().length >= 2 && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)}/>
+          <div className="absolute right-0 mt-1.5 w-[min(26rem,90vw)] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-pop z-40 anim-in overflow-hidden">
+            {results.length === 0 ? (
+              <div className="p-5 text-center">
+                <Icon name="search" className="w-5 h-5 text-slate-300 mx-auto"/>
+                <div className="text-[12px] font-semibold text-slate-600 dark:text-slate-300 mt-1.5">No match for "{q}"</div>
+                <div className="text-[11px] text-slate-400 mt-0.5">Try a name, employee code, store, city or page.</div>
+              </div>
+            ) : (
+              <div className="max-h-[22rem] overflow-auto py-1">
+                {['People', 'Stores', 'Policies', 'Screens'].map((group) => {
+                  const rows = results.filter((r) => r.group === group);
+                  if (!rows.length) return null;
+                  return (
+                    <div key={group}>
+                      <div className="px-3 pt-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">{group}</div>
+                      {rows.map((r) => {
+                        flat += 1;
+                        const active = flat === cursor;
+                        const i = flat;
+                        return (
+                          <button key={r.id} onMouseEnter={() => setCursor(i)} onClick={() => choose(r)}
+                            className={`w-full flex items-center gap-2.5 px-3 py-2 text-left ${active ? 'bg-brand-50 dark:bg-brand-900/25' : 'hover:bg-slate-50 dark:hover:bg-slate-800'}`}>
+                            {r.emp
+                              ? <Avatar emp={r.emp} size={26}/>
+                              : <div className="w-[26px] h-[26px] rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 flex items-center justify-center shrink-0"><Icon name={r.icon} className="w-3.5 h-3.5"/></div>}
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[12px] font-semibold text-slate-800 dark:text-slate-100 truncate">{r.title}</div>
+                              <div className="text-[10.5px] text-slate-500 truncate">{r.sub}</div>
+                            </div>
+                            <Icon name="arrow-right" className={`w-3.5 h-3.5 shrink-0 ${active ? 'text-brand-600' : 'text-slate-300'}`}/>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <div className="px-3 py-1.5 border-t border-slate-100 dark:border-slate-800 text-[10px] text-slate-400 flex items-center gap-3">
+              <span>↑↓ move</span><span>↵ open</span><span>esc close</span>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TopBar({ user, onSwitch, dark, setDark, onReset, viewMode, setViewMode, onLogout, onTour, onToggleNav, onNavigate }) {
   const store = useStore();
   const toast = useToast();
   const { confirm, ConfirmUI } = useConfirm();
@@ -67,11 +245,7 @@ function TopBar({ user, onSwitch, dark, setDark, onReset, viewMode, setViewMode,
 
       <div className="flex-1 min-w-0"/>
 
-      {/* Search */}
-      <div className="hidden xl:flex items-center gap-2 w-60 h-9 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
-        <Icon name="search" className="w-3.5 h-3.5 text-slate-400"/>
-        <input className="flex-1 min-w-0 bg-transparent text-[12px] outline-none dark:text-slate-100 placeholder:text-slate-400" placeholder="Search employees, stores…"/>
-      </div>
+      {onNavigate && roleOf(user) !== 'field-employee' && <GlobalSearch user={user} onNavigate={onNavigate}/>}
 
       <PeriodClock/>
 
@@ -202,26 +376,28 @@ function TopBar({ user, onSwitch, dark, setDark, onReset, viewMode, setViewMode,
    `section` groups items under a heading; `sub` lists the tabs a section owns so
    the sidebar can advertise them without becoming a second navigation system. */
 const NAV_ITEMS = [
-  { id: 'overview',  section: 'Workspace',  label: 'Dashboard',    icon: 'home',        roles: ['super-admin','hr-manager','site-manager'] },
+  { id: 'overview',  section: 'Workspace',  label: 'Dashboard',    icon: 'home',        roles: ['admin','hr-manager','site-manager'] },
 
-  { id: 'employees', section: 'People',     label: 'Employees',    icon: 'users',       roles: ['super-admin','hr-manager','site-manager'],
-    sub: ['Existing', 'New', 'Onboarding'], badge: (s) => s.getEmployees({ status: 'pending' }).length },
-  { id: 'attendance', section: 'People',    label: 'Attendance',   icon: 'calendar',    roles: ['super-admin','hr-manager','site-manager'],
+  { id: 'employees', section: 'People',     label: 'Employees',    icon: 'users',       roles: ['admin','hr-manager','site-manager'],
+    // Onboarding is an HR/Admin queue, so it is not advertised to a Team Lead.
+    sub: (role) => (role === 'site-manager' ? ['Existing', 'New'] : ['Existing', 'New', 'Onboarding']),
+    badge: (s) => s.getEmployees({ status: 'pending' }).length },
+  { id: 'attendance', section: 'People',    label: 'Attendance',   icon: 'calendar',    roles: ['admin','hr-manager','site-manager'],
     sub: ['Overview', 'Daily', 'Monthly', 'Regularization'], badge: (s) => s.getRegularisations({ status: 'pending' }).length },
-  { id: 'appreciation', section: 'People',  label: 'Appreciation', icon: 'award',       roles: ['super-admin','hr-manager','site-manager'] },
+  { id: 'appreciation', section: 'People',  label: 'Appreciation', icon: 'award',       roles: ['admin','hr-manager','site-manager'] },
 
-  { id: 'payroll',   section: 'Compensation', label: 'Payroll',    icon: 'wallet',      roles: ['super-admin','hr-manager'],
+  { id: 'payroll',   section: 'Compensation', label: 'Payroll',    icon: 'wallet',      roles: ['admin','hr-manager'],
     sub: ['Payroll', 'Travel Allowance', 'Incentive'] },
-  { id: 'incentives', section: 'Compensation', label: 'Incentives', icon: 'trending-up', roles: ['super-admin','hr-manager','site-manager'] },
+  { id: 'incentives', section: 'Compensation', label: 'Incentives', icon: 'trending-up', roles: ['admin','hr-manager','site-manager'] },
 
-  { id: 'sites',     section: 'Operations', label: 'Client Sites', icon: 'building',    roles: ['super-admin','hr-manager'], sub: ['Store Targets'] },
-  { id: 'livemap',   section: 'Operations', label: 'Live Map',     icon: 'map',         roles: ['super-admin','hr-manager','site-manager'] },
-  { id: 'reports',   section: 'Operations', label: 'Reports',      icon: 'chart',       roles: ['super-admin','hr-manager','site-manager'] },
+  { id: 'sites',     section: 'Operations', label: 'Client Sites', icon: 'building',    roles: ['admin','hr-manager'], sub: ['Store Targets'] },
+  { id: 'livemap',   section: 'Operations', label: 'Live Map',     icon: 'map',         roles: ['admin','hr-manager','site-manager'] },
+  { id: 'reports',   section: 'Operations', label: 'Reports',      icon: 'chart',       roles: ['admin','hr-manager','site-manager'] },
 ];
 
 function SideBar({ nav, setNav, user, mobileOpen, onCloseMobile }) {
   const store = useStore();
-  const items = NAV_ITEMS.filter((n) => n.roles.includes(user.role));
+  const items = NAV_ITEMS.filter((n) => n.roles.includes(roleOf(user)));
   const sections = items.reduce((acc, i) => {
     (acc[i.section] = acc[i.section] || []).push(i);
     return acc;
@@ -248,6 +424,9 @@ function SideBar({ nav, setNav, user, mobileOpen, onCloseMobile }) {
                 {list.map((i) => {
                   const badge = i.badge ? i.badge(store) : 0;
                   const active = nav === i.id;
+                  // `sub` may be role-dependent, so a tab the role cannot open
+                  // is never advertised in the sidebar.
+                  const subs = typeof i.sub === 'function' ? i.sub(roleOf(user)) : i.sub;
                   return (
                     <div key={i.id}>
                       <button data-tour={`nav-${i.id}`} onClick={() => nav$(i.id)}
@@ -257,9 +436,9 @@ function SideBar({ nav, setNav, user, mobileOpen, onCloseMobile }) {
                         {badge > 0 && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-brand-700 text-white shrink-0">{badge}</span>}
                       </button>
                       {/* Show a section's tabs only while you are in it. */}
-                      {active && i.sub && (
+                      {active && subs && subs.length > 0 && (
                         <div className="ml-[22px] mt-0.5 mb-1 pl-2.5 border-l border-slate-200 dark:border-slate-700 space-y-0.5">
-                          {i.sub.map((s) => (
+                          {subs.map((s) => (
                             <div key={s} className="text-[11px] text-slate-500 dark:text-slate-400 py-0.5">{s}</div>
                           ))}
                         </div>
@@ -288,23 +467,28 @@ function SideBar({ nav, setNav, user, mobileOpen, onCloseMobile }) {
   );
 }
 
-function AdminApp({ user, splitMode, nav, setNav, mobileNavOpen, setMobileNavOpen }) {
+/* `navArg` is how one screen hands the next screen its starting state — the
+   dashboard's "Decide" opens Attendance already on the Regularization tab, and
+   a search hit opens Employees with that person's name in the filter. Pages
+   take it as a prop; nothing reads global state. */
+function AdminApp({ user, splitMode, nav, navArg, setNav, mobileNavOpen, setMobileNavOpen }) {
   // A role that loses access to the current page (e.g. switching to Team Lead
   // while sitting on Payroll) is sent back to the dashboard rather than a blank.
   useEffect(() => {
     const item = NAV_ITEMS.find((n) => n.id === nav);
-    if (item && !item.roles.includes(user.role)) setNav('overview');
+    if (item && !item.roles.includes(roleOf(user))) setNav('overview');
   }, [user.role, nav]);
 
+  const arg = navArg || null;
   const view = (() => {
     switch (nav) {
       case 'overview':     return <OverviewPage user={user} onNavigate={setNav}/>;
-      case 'employees':    return <EmployeesPage user={user}/>;
-      case 'attendance':   return <AttendancePage user={user}/>;
+      case 'employees':    return <EmployeesPage user={user} navArg={arg}/>;
+      case 'attendance':   return <AttendancePage user={user} navArg={arg}/>;
       case 'livemap':      return <LiveMapPage user={user}/>;
-      case 'payroll':      return <PayrollPage user={user}/>;
+      case 'payroll':      return <PayrollPage user={user} navArg={arg}/>;
       case 'incentives':   return <IncentivesPage user={user}/>;
-      case 'sites':        return <SitesPage user={user}/>;
+      case 'sites':        return <SitesPage user={user} navArg={arg}/>;
       case 'appreciation': return <AppreciationPage user={user}/>;
       case 'reports':      return <ReportsPage user={user}/>;
       default:             return <OverviewPage user={user} onNavigate={setNav}/>;
@@ -356,7 +540,18 @@ function AppShell({ user, onSwitch, onLogout, initialSplit }) {
     try { return !localStorage.getItem('sdc_tour_seen'); } catch (e) { return true; }
   });
   const [nav, setNav] = useState('overview'); // owned here so the tour can drive it
+  const [navArg, setNavArg] = useState(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  /* Single navigation entry point: sidebar, tour, dashboard alerts and search
+     all come through here, so a deep link and a click behave identically.
+     The arg is bumped with a nonce so navigating to the same page twice with
+     the same argument still re-applies it. */
+  const goTo = (id, arg) => {
+    setNav(id);
+    setNavArg(arg ? { ...arg, _n: Date.now() } : null);
+    setMobileNavOpen(false);
+  };
 
   // Start the tour on the dashboard so its spotlight targets exist.
   const startTour = () => { if (viewMode === 'mobile' && !isMobileUser) setViewMode('web'); setTourOpen(true); };
@@ -378,7 +573,7 @@ function AppShell({ user, onSwitch, onLogout, initialSplit }) {
     <div className="h-screen flex flex-col bg-slate-50 dark:bg-[#0B0F1A]">
       <TopBar user={user} onSwitch={onSwitch} dark={dark} setDark={setDark}
         viewMode={effectiveMode} setViewMode={setViewMode}
-        onReset={() => {}} onLogout={onLogout} onTour={startTour}
+        onReset={() => {}} onLogout={onLogout} onTour={startTour} onNavigate={goTo}
         onToggleNav={effectiveMode === 'mobile' ? null : () => setMobileNavOpen((o) => !o)}/>
       <div className="flex-1 flex min-h-0">
         {effectiveMode === 'mobile' ? (
@@ -386,19 +581,22 @@ function AppShell({ user, onSwitch, onLogout, initialSplit }) {
         ) : effectiveMode === 'split' ? (
           <>
             <div className="flex-1 min-w-0 flex">
-              <AdminApp user={user} splitMode nav={nav} setNav={setNav} mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}/>
+              <AdminApp user={user} splitMode nav={nav} navArg={navArg} setNav={goTo} mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}/>
             </div>
             <PhoneStage user={demoEmp} onLogout={onLogout} label={`Employee App · ${demoEmp.name}`}
               className="hidden xl:flex w-[460px] shrink-0 border-l border-slate-200 dark:border-slate-800"/>
           </>
         ) : (
-          <AdminApp user={user} nav={nav} setNav={setNav} mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}/>
+          <AdminApp user={user} nav={nav} navArg={navArg} setNav={goTo} mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}/>
         )}
       </div>
       {/* Desktop guided tour — admins only; field employees get the in-app mobile tour. */}
-      {tourOpen && !isMobileUser && <TourOverlay steps={ADMIN_TOUR_STEPS} onNavigate={setNav} onClose={() => { setTourOpen(false); try { localStorage.setItem('sdc_tour_seen','1'); } catch(e){} }}/>}
+      {tourOpen && !isMobileUser && <TourOverlay steps={ADMIN_TOUR_STEPS} onNavigate={goTo} onClose={() => { setTourOpen(false); try { localStorage.setItem('sdc_tour_seen','1'); } catch(e){} }}/>}
     </div>
   );
 }
 
-Object.assign(window, { AppShell, TopBar, SideBar, AdminApp, PhoneStage, PeriodClock, NAV_ITEMS });
+Object.assign(window, {
+  AppShell, TopBar, SideBar, AdminApp, PhoneStage, PeriodClock, NAV_ITEMS,
+  GlobalSearch, useGlobalSearch,
+});

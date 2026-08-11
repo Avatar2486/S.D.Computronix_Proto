@@ -1,31 +1,46 @@
-/* Live attendance map with real-time positions, geofence circles, trails */
-function LiveMapPage({ user }) {
+/* Live attendance map with real-time positions, geofence circles, trails.
+
+   The map is created through `useLeafletMap`, which re-measures the container
+   once layout has settled and again whenever it resizes. Creating a Leaflet map
+   inside the page wrapper while its entry animation is still running used to
+   leave the tile grid laid out against a stale box, so the panel rendered
+   nothing at all — that is what the shared hook exists to prevent. */
+function LiveMapPage({ user, navArg }) {
   const store = useStore();
   const ref = useRef(null);
-  const mapRef = useRef(null);
   const layerRef = useRef(null);
   const [selectedEmp, setSelectedEmp] = useState(null);
   const [showTrails, setShowTrails] = useState(true);
+  const [q, setQ] = useState('');
+  const available = hasLeaflet();
 
-  useEffect(() => {
-    if (!ref.current || mapRef.current) return;
-    const m = L.map(ref.current, { attributionControl: true }).setView([21.5, 78.5], 5);
+  const mapRef = useLeafletMap(ref, (el) => {
+    const m = L.map(el, { attributionControl: true }).setView([21.5, 78.5], 5);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { subdomains: 'abcd', maxZoom: 18, attribution: '&copy; OpenStreetMap &copy; CartoDB' }).addTo(m);
-    mapRef.current = m;
     layerRef.current = L.layerGroup().addTo(m);
-    setTimeout(() => m.invalidateSize(), 100);
+    return m;
   }, []);
+
+  const isSiteMgr = roleOf(user) === 'site-manager';
+  const positions = store.getLivePositions().filter((p) => !isSiteMgr || p.emp.siteId === user.siteId);
+  const alerts = positions.filter((p) => !p.inside);
+
+  const listed = q
+    ? positions.filter(({ emp, site }) => `${emp.name} ${emp.code} ${site.name} ${site.city}`.toLowerCase().includes(q.toLowerCase()))
+    : positions;
 
   useEffect(() => {
     const m = mapRef.current, layer = layerRef.current;
     if (!m || !layer) return;
     layer.clearLayers();
-    const isSiteMgr = user.role === 'site-manager';
-    const positions = store.getLivePositions().filter((p) => !isSiteMgr || p.emp.siteId === user.siteId);
     const sites = store.getSites().filter((s) => !isSiteMgr || s.id === user.siteId);
     const bounds = [];
 
-    sites.forEach((s) => {
+    /* Only draw the stores that have somebody standing in them. Rendering all
+       562 geo-fences turned the national view into a solid blue sheet and cost
+       a second of layout on every refresh. */
+    const activeSiteIds = new Set(positions.map((p) => p.site.id));
+    sites.filter((s) => activeSiteIds.has(s.id)).forEach((s) => {
       L.circle([s.lat, s.lng], { radius: s.radius, color: '#1E40AF', weight: 1.5, fillColor: '#1E40AF', fillOpacity: 0.08, dashArray: '4,4' }).addTo(layer);
       const siteIcon = L.divIcon({ className: '', html: `<div style="background:#1E40AF;color:white;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.2)">📍 ${s.city}</div>`, iconSize: null });
       L.marker([s.lat, s.lng], { icon: siteIcon }).addTo(layer);
@@ -64,40 +79,52 @@ function LiveMapPage({ user }) {
     });
 
     if (bounds.length) m.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
-  }, [store.state, showTrails, user]);
+  }, [store.state, showTrails, user, mapRef.current]);
 
-  const positions = store.getLivePositions().filter((p) => user.role !== 'site-manager' || p.emp.siteId === user.siteId);
-  const alerts = positions.filter((p) => !p.inside);
+  /* Arriving from a dashboard geo-fence alert: centre on that person straight
+     away, so "Live Map" answers the question the alert asked. */
+  useEffect(() => {
+    if (!navArg || !navArg.focusEmpId) return;
+    const hit = positions.find((p) => p.emp.id === navArg.focusEmpId);
+    if (!hit) return;
+    setSelectedEmp(hit.emp);
+    const m = mapRef.current;
+    if (m) setTimeout(() => { try { m.invalidateSize(); m.setView([hit.lat, hit.lng], 15); } catch (e) {} }, 300);
+  }, [navArg && navArg._n, mapRef.current]);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-end justify-between flex-wrap gap-3">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Field Operations</div>
-          <div className="text-xl font-bold text-slate-900 dark:text-white">Live attendance map</div>
-          <div className="text-[12px] text-slate-500 mt-0.5">All active field employees · updated in real time</div>
-        </div>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300 font-semibold">
-            <input type="checkbox" checked={showTrails} onChange={(e) => setShowTrails(e.target.checked)} className="accent-brand-700"/>Show trails
-          </label>
-          <Badge tone={alerts.length > 0 ? 'red' : 'green'}><span className="w-1.5 h-1.5 rounded-full bg-current pulse-dot"/>{alerts.length > 0 ? `${alerts.length} out of fence` : 'All within fence'}</Badge>
-        </div>
-      </div>
+      <PageHeader eyebrow="Field Operations" title="Live attendance map"
+        subtitle="Every active field employee's last recorded position, with their store's geo-fence.">
+        <label className="flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300 font-semibold">
+          <input type="checkbox" checked={showTrails} onChange={(e) => setShowTrails(e.target.checked)} className="accent-brand-700"/>Show trails
+        </label>
+        <Badge tone={alerts.length > 0 ? 'red' : 'green'}><span className="w-1.5 h-1.5 rounded-full bg-current pulse-dot"/>{alerts.length > 0 ? `${alerts.length} out of fence` : 'All within fence'}</Badge>
+      </PageHeader>
 
       <div className="grid grid-cols-12 gap-4">
         <div className="col-span-12 lg:col-span-8">
           <Card noBody className="overflow-hidden">
-            <div ref={ref} style={{ height: 560 }}/>
+            {available
+              ? <div ref={ref} style={{ height: 560 }}/>
+              : <MapUnavailable height={560}/>}
           </Card>
         </div>
         <div className="col-span-12 lg:col-span-4 space-y-3">
-          <Card title={`Field staff (${positions.length})`} bodyClass="p-0" className="max-h-[560px] overflow-hidden">
-            <div className="overflow-y-auto max-h-[520px]">
-              {positions.map(({ emp, site, lat, lng, inside }) => {
+          <Card title={`Field staff (${listed.length})`} bodyClass="p-0" className="max-h-[560px] overflow-hidden"
+            right={
+              <div className="flex items-center gap-1.5 h-7 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
+                <Icon name="search" className="w-3.5 h-3.5 text-slate-400"/>
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find…"
+                  className="bg-transparent text-[12px] outline-none w-20 sm:w-24 dark:text-slate-100"/>
+              </div>
+            }>
+            <div className="overflow-y-auto max-h-[500px]">
+              {listed.length === 0 && <Empty icon="pin" title="Nobody on the map" hint={q ? 'No one matches that search.' : 'No field employee has clocked in today.'}/>}
+              {listed.map(({ emp, site, lat, lng, inside }) => {
                 const dist = Math.round(Store.haversine(lat, lng, site.lat, site.lng));
                 return (
-                  <button key={emp.id} onClick={() => { setSelectedEmp(emp); mapRef.current.setView([lat, lng], 15); }}
+                  <button key={emp.id} onClick={() => { setSelectedEmp(emp); if (mapRef.current) mapRef.current.setView([lat, lng], 15); }}
                     className={`w-full text-left p-3 flex items-center gap-2.5 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 ${selectedEmp?.id === emp.id ? 'bg-brand-50 dark:bg-brand-900/20' : ''}`}>
                     <Avatar emp={emp} size={32}/>
                     <div className="flex-1 min-w-0">
@@ -121,65 +148,58 @@ function LiveMapPage({ user }) {
   );
 }
 
+/* Location history — a centred dialog like every other detail view in the app,
+   rather than the side drawer this used to be. */
 function LocationHistoryPanel({ emp, onClose }) {
   const store = useStore();
   const today = '2026-07-15';
   const marks = store.getAttendance({ employeeId: emp.id, date: today });
   const site = store.getSite(emp.siteId);
-
   const ref = useRef(null);
-  const mapRef = useRef(null);
-  useEffect(() => {
-    if (!ref.current || mapRef.current) return;
-    const m = L.map(ref.current, { zoomControl: false, attributionControl: false }).setView([site.lat, site.lng], 15);
+  const available = hasLeaflet() && !!site;
+
+  useLeafletMap(ref, (el) => {
+    if (!site) return null;
+    const m = L.map(el, { zoomControl: false, attributionControl: false }).setView([site.lat, site.lng], 15);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { subdomains: 'abcd' }).addTo(m);
     L.circle([site.lat, site.lng], { radius: site.radius, color: '#1E40AF', weight: 1, fillOpacity: 0.08 }).addTo(m);
-    marks.forEach((mk, i) => {
-      L.circleMarker([mk.latitude, mk.longitude], { radius: 5, color: mk.insideGeofence ? '#059669' : '#e11d48', fillColor: mk.insideGeofence ? '#059669' : '#e11d48', fillOpacity: 0.8, weight: 2 }).bindTooltip(`${mk.type} · ${fmtTime(mk.timestamp)}`).addTo(m);
+    marks.forEach((mk) => {
+      L.circleMarker([mk.latitude, mk.longitude], { radius: 5, color: mk.insideGeofence ? '#059669' : '#e11d48', fillColor: mk.insideGeofence ? '#059669' : '#e11d48', fillOpacity: 0.8, weight: 2 })
+        .bindTooltip(`${mk.type} · ${fmtTime(mk.timestamp)}`).addTo(m);
     });
-    if (marks.length > 1) L.polyline(marks.map((m) => [m.latitude, m.longitude]), { color: '#1E40AF', weight: 2, dashArray: '4,3' }).addTo(m);
-    mapRef.current = m;
-    setTimeout(() => m.invalidateSize(), 100);
-  }, []);
+    if (marks.length > 1) L.polyline(marks.map((mk) => [mk.latitude, mk.longitude]), { color: '#1E40AF', weight: 2, dashArray: '4,3' }).addTo(m);
+    return m;
+  }, [emp.id]);
 
   return (
-    <div className="fixed inset-0 z-40 flex anim-in">
-      <div className="flex-1 bg-slate-900/50 backdrop-blur-sm" onClick={onClose}/>
-      <div className="w-[560px] bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 h-full overflow-y-auto">
-        <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-start justify-between">
-          <div className="flex items-center gap-2.5">
-            <Avatar emp={emp} size={40}/>
-            <div>
-              <div className="font-bold text-slate-900 dark:text-white">{emp.name}</div>
-              <div className="text-[11px] text-slate-500">Location history · 15 Jul 2026</div>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded"><Icon name="x"/></button>
-        </div>
-        <div ref={ref} style={{ height: 280 }} className="border-b border-slate-200 dark:border-slate-800"/>
-        <div className="p-3">
-          <div className="text-[11px] uppercase font-bold tracking-wide text-slate-500 mb-2">Timeline</div>
-          <div className="space-y-1.5">
-            {marks.map((mk) => (
-              <div key={mk.id} className="flex items-center gap-3 p-2 rounded bg-slate-50 dark:bg-slate-800/50">
-                <div className={`w-8 h-8 rounded-md flex items-center justify-center ${mk.insideGeofence ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30' : 'bg-rose-100 text-rose-600 dark:bg-rose-900/30'}`}>
-                  <Icon name={mk.type === 'clock-in' ? 'check' : mk.type === 'clock-out' ? 'x' : 'target'} className="w-4 h-4"/>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[12px] font-semibold text-slate-800 dark:text-slate-100 capitalize">{mk.type.replace('-', ' ')}</div>
-                  <div className="text-[10px] text-slate-500 font-mono">{mk.latitude.toFixed(5)}, {mk.longitude.toFixed(5)}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-[12px] font-mono font-semibold text-slate-700 dark:text-slate-200">{fmtTime(mk.timestamp)}</div>
-                  {!mk.insideGeofence && <Badge tone="red">Out</Badge>}
-                </div>
+    <Modal open onClose={onClose} size="lg" bodyClass="p-0" icon="map"
+      title={emp.name} subtitle={`Location history · ${site ? site.name : 'No store assigned'} · 15 Jul 2026`}
+      footer={<Btn variant="primary" onClick={onClose}>Close</Btn>}>
+      {available
+        ? <div ref={ref} style={{ height: 280 }} className="border-b border-slate-200 dark:border-slate-800"/>
+        : <div className="p-3 border-b border-slate-200 dark:border-slate-800"><MapUnavailable height={200}/></div>}
+      <div className="p-3">
+        <div className="text-[11px] uppercase font-bold tracking-wide text-slate-500 mb-2">Timeline</div>
+        <div className="space-y-1.5">
+          {marks.map((mk) => (
+            <div key={mk.id} className="flex items-center gap-3 p-2 rounded bg-slate-50 dark:bg-slate-800/50">
+              <div className={`w-8 h-8 rounded-md flex items-center justify-center shrink-0 ${mk.insideGeofence ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30' : 'bg-rose-100 text-rose-600 dark:bg-rose-900/30'}`}>
+                <Icon name={mk.type === 'clock-in' ? 'sign-in' : 'sign-out'} className="w-4 h-4"/>
               </div>
-            ))}
-            {marks.length === 0 && <Empty title="No marks recorded today"/>}
-          </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12px] font-semibold text-slate-800 dark:text-slate-100 capitalize">{mk.type.replace('-', ' ')}</div>
+                <div className="text-[10px] text-slate-500 font-mono">{mk.latitude.toFixed(5)}, {mk.longitude.toFixed(5)}</div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="text-[12px] font-mono font-semibold text-slate-700 dark:text-slate-200">{fmtTime(mk.timestamp)}</div>
+                {!mk.insideGeofence && <Badge tone="red">Out</Badge>}
+              </div>
+            </div>
+          ))}
+          {marks.length === 0 && <Empty title="No marks recorded today"/>}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 

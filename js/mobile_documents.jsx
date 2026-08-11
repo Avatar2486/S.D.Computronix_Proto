@@ -93,8 +93,12 @@ function MobileSamplePreview({ docKey, onClose }) {
   );
 }
 
-/* ---- One document row ---- */
-function MobileDocCard({ doc, record, onPreview, onFile }) {
+/* ---- One document row ----
+   `locked` is true once an identity proof (Aadhaar / PAN) has been verified.
+   The document is then the company's record of who this person is, and letting
+   the holder swap the file afterwards would undo the verification — so Replace
+   disappears and the row says where to go instead. */
+function MobileDocCard({ doc, record, locked, onPreview, onFile }) {
   const camRef = useRef(null);
   const fileRef = useRef(null);
   const [error, setError] = useState('');
@@ -129,7 +133,8 @@ function MobileDocCard({ doc, record, onPreview, onFile }) {
               <div className="text-[12px] font-bold text-slate-900 dark:text-white truncate">{doc.label}</div>
               <div className="text-[10px] text-slate-500 leading-snug mt-0.5">{doc.hint}</div>
             </div>
-            {verified ? <Badge tone="green">Verified</Badge>
+            {locked ? <Badge tone="green"><Icon name="lock" className="w-3 h-3"/>Verified</Badge>
+              : verified ? <Badge tone="green">Verified</Badge>
               : uploaded ? <Badge tone="amber">In review</Badge>
               : doc.required ? <Badge tone="red">Required</Badge>
               : <Badge tone="slate">Optional</Badge>}
@@ -149,20 +154,27 @@ function MobileDocCard({ doc, record, onPreview, onFile }) {
             </div>
           )}
 
-          <div className="mt-2 flex items-center gap-1.5">
-            <button onClick={() => onPreview(doc.k)}
-              className="flex items-center gap-1 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-600 text-[10px] font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">
-              <Icon name="eye" className="w-3 h-3"/>View Sample
-            </button>
-            <button onClick={() => camRef.current && camRef.current.click()}
-              className="flex items-center gap-1 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-600 text-[10px] font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">
-              <Icon name="camera" className="w-3 h-3"/>Camera
-            </button>
-            <button onClick={() => fileRef.current && fileRef.current.click()}
-              className="flex items-center gap-1 px-2 py-1 rounded-md bg-brand-700 hover:bg-brand-800 text-white text-[10px] font-semibold">
-              <Icon name="upload" className="w-3 h-3"/>{uploaded || verified ? 'Replace' : 'Upload'}
-            </button>
-          </div>
+          {locked ? (
+            <div className="mt-2 flex items-start gap-1.5 text-[10px] text-slate-500 dark:text-slate-400">
+              <Icon name="lock" className="w-3 h-3 shrink-0 mt-px"/>
+              <span>Verified and locked. To correct this document, contact Admin.</span>
+            </div>
+          ) : (
+            <div className="mt-2 flex items-center gap-1.5">
+              <button onClick={() => onPreview(doc.k)}
+                className="flex items-center gap-1 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-600 text-[10px] font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">
+                <Icon name="eye" className="w-3 h-3"/>View Sample
+              </button>
+              <button onClick={() => camRef.current && camRef.current.click()}
+                className="flex items-center gap-1 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-600 text-[10px] font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">
+                <Icon name="camera" className="w-3 h-3"/>Camera
+              </button>
+              <button onClick={() => fileRef.current && fileRef.current.click()}
+                className="flex items-center gap-1 px-2 py-1 rounded-md bg-brand-700 hover:bg-brand-800 text-white text-[10px] font-semibold">
+                <Icon name="upload" className="w-3 h-3"/>{uploaded || verified ? 'Replace' : 'Upload'}
+              </button>
+            </div>
+          )}
 
           <input ref={camRef} type="file" accept="image/*" capture="environment" className="hidden"
             onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; pick(f, 'camera'); }}/>
@@ -187,6 +199,10 @@ function MobileDocsSheet({ emp, onClose }) {
   const pct = Math.round((done / required.length) * 100);
 
   const onFile = (docKey, file, source) => {
+    if (Store.isDocumentLocked(live, docKey)) {
+      toast('This document is verified and locked — contact Admin to change it', 'error');
+      return;
+    }
     Store.updateEmployee(live.id, {
       documents: {
         ...docs,
@@ -241,7 +257,8 @@ function MobileDocsSheet({ emp, onClose }) {
         </div>
 
         {MOBILE_DOC_LIST.map((d) => (
-          <MobileDocCard key={d.k} doc={d} record={docs[d.k]} onPreview={setPreview} onFile={onFile}/>
+          <MobileDocCard key={d.k} doc={d} record={docs[d.k]} locked={Store.isDocumentLocked(live, d.k)}
+            onPreview={setPreview} onFile={onFile}/>
         ))}
 
         <div className="pt-1 pb-4">

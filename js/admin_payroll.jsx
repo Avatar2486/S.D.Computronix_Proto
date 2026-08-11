@@ -122,12 +122,13 @@ function PayslipModal({ payslip, emp, onClose }) {
   );
 }
 
-function PayrollPage({ user }) {
+function PayrollPage({ user, navArg }) {
   const store = useStore();
   const [month, setMonth] = useState('2026-06');
   const [selected, setSelected] = useState(null);
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
+  useEffect(() => { if (navArg && navArg.search) { setQ(navArg.search); setPage(0); } }, [navArg && navArg._n]);
   const emps = store.getEmployees({ status: 'active' });
   const run = store.getPayrollRun(month);
   const payslips = useMemo(() => emps.map((e) => store.computePayslip(e.id, month)), [store.state, month]);
@@ -269,7 +270,7 @@ function PayrollPage({ user }) {
           ) : (
             <>
               <table className="w-full dense-table text-[12.5px]">
-                <thead><tr><th>Employee</th><th>Store</th><th className="text-right">Allowance</th></tr></thead>
+                <thead><tr><th>Employee</th><th>Store</th><th className="text-right">Allowance</th><th/></tr></thead>
                 <tbody>
                   {topTravel.map((p) => {
                     const e = store.getEmployee(p.employeeId);
@@ -282,6 +283,9 @@ function PayrollPage({ user }) {
                         </td>
                         <td className="text-[11px] text-slate-500 truncate max-w-[150px]">{store.getSite(e.siteId)?.name || '—'}</td>
                         <td className="text-right font-mono font-bold text-emerald-700 dark:text-emerald-400">+{fmtINR(p.travelAllowance)}</td>
+                        {/* Same payslip the main register opens — the allowance
+                            only makes sense next to the rest of the pay. */}
+                        <td className="text-right"><Btn size="xs" onClick={() => setSelected(p)}>View</Btn></td>
                       </tr>
                     );
                   })}
@@ -333,7 +337,7 @@ function PayrollPage({ user }) {
           ) : (
             <>
               <table className="w-full dense-table text-[12.5px]">
-                <thead><tr><th>Employee</th><th className="text-right">Sales</th><th>Basis</th><th className="text-right">Incentive</th></tr></thead>
+                <thead><tr><th>Employee</th><th className="text-right">Sales</th><th>Basis</th><th className="text-right">Incentive</th><th/></tr></thead>
                 <tbody>
                   {topIncentive.map((p) => {
                     const e = store.getEmployee(p.employeeId);
@@ -351,6 +355,7 @@ function PayrollPage({ user }) {
                           </Badge>
                         </td>
                         <td className="text-right font-mono font-bold text-emerald-700 dark:text-emerald-400">+{fmtINR(p.incentive)}</td>
+                        <td className="text-right"><Btn size="xs" onClick={() => setSelected(p)}>View</Btn></td>
                       </tr>
                     );
                   })}
