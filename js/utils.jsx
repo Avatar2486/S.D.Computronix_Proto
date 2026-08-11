@@ -753,11 +753,18 @@ const MONEY_ACTIONS = ['salary.view', 'incentive.view', 'payroll.view'];
 
 const PERMISSIONS = {
   'admin':          ['*'],
-  'hr-manager':     ['employee.view','employee.create','employee.edit','employee.submit','document.upload','designation.edit','geofence.edit',
+  'hr-manager':     ['employee.view','employee.create','employee.edit','employee.submit','document.view','document.upload','designation.edit','geofence.edit',
                      'salary.view','attendance.view','attendance.decide','payroll.view','incentive.view','incentive.edit','target.view','target.edit',
                      'site.view','policy.view','policy.edit','report.view','kudos.send'],
   /* Team Lead: read their own technicians, nothing that writes to a personnel
-     record, decides a correction, or reveals earnings. */
+     record, decides a correction, reveals earnings, or opens a personal file.
+
+     `document.view` covers the personal file — government ID (Aadhaar, PAN,
+     bank), education certificates and the signed offer letter. Those exist for
+     verification and payroll, both of which are HR work; a Team Lead running a
+     store's day has no reason to hold someone's identity documents or know
+     what they were offered. Company policies are the opposite: published, and
+     open to everyone. */
   'site-manager':   ['employee.view','attendance.view','target.view','site.view','policy.view','report.view','kudos.send'],
   'field-employee': ['policy.view'],
 };

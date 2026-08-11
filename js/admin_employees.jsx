@@ -191,6 +191,9 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
   const canSeePay = can(user, 'salary.view');
   const canSetPay = can(user, 'salary.edit');
   const canSeeIncentive = can(user, 'incentive.view');
+  /* The personal file — government ID, education certificates, offer letter.
+     HR and Admin only; see the note on `document.view` in PERMISSIONS. */
+  const canSeeDocs = can(user, 'document.view');
 
   const sites = store.getSites();
   const siteOptions = useMemo(() => [
@@ -247,11 +250,15 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
 
   const TABS = [
     { id: 'profile',   label: 'Profile',    icon: 'user' },
-    { id: 'education', label: 'Education',  icon: 'graduation', badge: (emp.education || []).length },
-    { id: 'documents', label: 'Documents',  icon: 'file' },
+    ...(canSeeDocs ? [
+      { id: 'education', label: 'Education',  icon: 'graduation', badge: (emp.education || []).length },
+      { id: 'documents', label: 'Documents',  icon: 'file' },
+    ] : []),
     { id: 'work',      label: canSeePay ? 'Attendance & pay' : 'Attendance', icon: 'wallet' },
     { id: 'settings',  label: 'Settings',   icon: 'settings' },
   ];
+  // Switching to a role that loses a tab must not leave a blank panel behind.
+  useEffect(() => { if (!TABS.some((t) => t.id === tab)) setTab('profile'); }, [canSeeDocs, tab]);
 
   const infoTile = (k, v, i) => (
     <div key={k} className="p-2.5 rounded-md bg-slate-50 dark:bg-slate-800/50 flex items-center gap-2.5 min-w-0">
@@ -272,7 +279,9 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
             {canApprove && emp.approvalStatus === 'pending-approval' && (
               <Btn variant="success" onClick={approve}><Icon name="check-circle" className="w-3.5 h-3.5"/>Approve employee</Btn>
             )}
-            {emp.status === 'active' && (
+            {/* The offer letter states the terms of employment, including pay
+                — it belongs to HR and the employee, not to a Team Lead. */}
+            {canSeeDocs && emp.status === 'active' && (
               <Btn onClick={() => setOfferOpen(true)}><Icon name="file" className="w-3.5 h-3.5"/>Offer letter</Btn>
             )}
             {canEdit && (
@@ -362,12 +371,14 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
                       onChange={(e) => setD({ baseSalary: e.target.value })}/>
                   </Field>
                 )}
-                <Field label="Aadhaar (masked)"><Input value={draft.aadhaarMasked} onChange={(e) => setD({ aadhaarMasked: e.target.value })} placeholder="XXXX-XXXX-4321"/></Field>
-                <Field label="PAN (masked)"><Input value={draft.panMasked} onChange={(e) => setD({ panMasked: e.target.value })} placeholder="ABXXX7845N"/></Field>
-                <label className="flex items-center gap-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200 cursor-pointer self-end pb-1">
-                  <input type="checkbox" checked={draft.bankVerified} onChange={(e) => setD({ bankVerified: e.target.checked })} className="accent-brand-700 w-4 h-4"/>
-                  Bank verified (penny-drop)
-                </label>
+                {canSeeDocs && <>
+                  <Field label="Aadhaar (masked)"><Input value={draft.aadhaarMasked} onChange={(e) => setD({ aadhaarMasked: e.target.value })} placeholder="XXXX-XXXX-4321"/></Field>
+                  <Field label="PAN (masked)"><Input value={draft.panMasked} onChange={(e) => setD({ panMasked: e.target.value })} placeholder="ABXXX7845N"/></Field>
+                  <label className="flex items-center gap-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200 cursor-pointer self-end pb-1">
+                    <input type="checkbox" checked={draft.bankVerified} onChange={(e) => setD({ bankVerified: e.target.checked })} className="accent-brand-700 w-4 h-4"/>
+                    Bank verified (penny-drop)
+                  </label>
+                </>}
               </div>
 
               <div>
@@ -389,10 +400,13 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
                   ['Phone', emp.phone || '—', 'phone'],
                   ['Email', emp.email || '—', 'mail'],
                   ['Joined', emp.joiningDate ? fmtDate(emp.joiningDate, { year: true }) : 'Not yet', 'calendar'],
-                  ['Aadhaar', emp.aadhaarMasked || '—', 'shield'],
-                  ['PAN', emp.panMasked || '—', 'shield'],
+                  // Government ID and bank status are part of the personal file.
+                  ...(canSeeDocs ? [
+                    ['Aadhaar', emp.aadhaarMasked || '—', 'shield'],
+                    ['PAN', emp.panMasked || '—', 'shield'],
+                  ] : []),
                   ...(canSeePay ? [['Base salary', fmtINR(emp.baseSalary), 'wallet']] : []),
-                  ['Bank', emp.bankVerified ? 'Verified ✓' : 'Not verified', 'wallet'],
+                  ...(canSeeDocs ? [['Bank', emp.bankVerified ? 'Verified ✓' : 'Not verified', 'wallet']] : []),
                   ['Store', site ? site.name : (isOffice ? 'Head office' : 'Unassigned'), 'building'],
                   ['Zone / State', site ? `${site.zone || '—'} · ${site.region || '—'}` : '—', 'map'],
                   ...(canSeeIncentive ? [['Incentive basis', inc.slab.label, 'trending-up']] : []),
@@ -582,8 +596,9 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
               {/* Compensation — HR reads it, only an Admin revises it. */}
               {canSeePay && <SalaryCard emp={emp} user={user}/>}
 
-              {/* Bank details — three self-service changes, then Admin only. */}
-              <BankDetailsCard emp={emp} user={user}/>
+              {/* Bank details — part of the personal file, and three
+                  self-service changes then Admin only. */}
+              {canSeeDocs && <BankDetailsCard emp={emp} user={user}/>}
 
               {/* Geo-fencing — editable for existing employees, per spec §9 */}
               <Card title="Geo-fencing" bodyClass="p-3"
@@ -608,8 +623,8 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
                 </label>
               </Card>
 
-              {/* Travel allowance */}
-              <Card title="Travel allowance" bodyClass="p-3"
+              {/* Travel allowance — a rupee figure the employee is paid. */}
+              {canSeePay && <Card title="Travel allowance" bodyClass="p-3"
                 right={<Badge tone={emp.travelEligible ? 'green' : 'slate'}>{emp.travelEligible ? 'Eligible' : 'Not eligible'}</Badge>}>
                 <div className="flex items-center gap-3 flex-wrap">
                   <label className={`flex items-center gap-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200 ${canEdit ? 'cursor-pointer' : 'opacity-60'}`}>
@@ -624,7 +639,7 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
                       onChange={(e) => Store.updateEmployee(emp.id, { travelAmount: +e.target.value })} className="!w-24"/>
                   </div>
                 </div>
-              </Card>
+              </Card>}
 
               {/* Designation history */}
               <Card title="Designation" bodyClass="p-3"
@@ -662,7 +677,7 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
       </Modal>
 
       {designationOpen && <DesignationModal emp={emp} user={user} onClose={() => setDesignationOpen(false)}/>}
-      <OfferLetterModal emp={emp} open={offerOpen} onClose={() => setOfferOpen(false)}/>
+      <OfferLetterModal emp={emp} open={canSeeDocs && offerOpen} onClose={() => setOfferOpen(false)}/>
     </>
   );
 }
@@ -1162,6 +1177,7 @@ function EmployeesPage({ user, navArg, onNavigate }) {
   const [openWizard, setOpenWizard] = useState(false);
   const isSiteMgr = roleOf(user) === 'site-manager';
   const canSeeSalary = can(user, 'salary.view');
+  const canSeeDocs = can(user, 'document.view');
   const hierarchy = store.getHierarchy();
 
   /* Arriving from global search or a dashboard alert: land on the tab that
@@ -1301,10 +1317,11 @@ function EmployeesPage({ user, navArg, onNavigate }) {
 
   const activeList = tab === 'existing' ? existing : newcomers;
 
-  /* The export honours the same permission as the table — a Team Lead cannot
-     download the salary column they are not shown on screen. */
+  /* The export honours the same permissions as the table — a Team Lead cannot
+     download the salary or government-ID columns they are not shown on screen. */
   const exportCSV = () => downloadCSV(`employees_${tab}.csv`, [
-    ['Code','Name','Designation','Type','Stage','Phone','Email','Store','City','State','Zone','Store Manager','Team Lead','Business Manager','Geo-fence','Status','Aadhaar','PAN',
+    ['Code','Name','Designation','Type','Stage','Phone','Email','Store','City','State','Zone','Store Manager','Team Lead','Business Manager','Geo-fence','Status',
+      ...(canSeeDocs ? ['Aadhaar', 'PAN'] : []),
       ...(canSeeSalary ? ['Base'] : [])],
     ...activeList.map((e) => {
       const s = siteById[e.siteId] || {};
@@ -1313,8 +1330,8 @@ function EmployeesPage({ user, navArg, onNavigate }) {
         store.getLifecycle(e).label, e.phone, e.email,
         s.name || '', s.city || '', s.region || '', s.zone || '',
         mgr ? mgr.name : '', s.cm || '', s.bm || '',
-        e.geoFenceEnabled ? 'Enabled' : 'Disabled',
-        e.status, e.aadhaarMasked, e.panMasked,
+        e.geoFenceEnabled ? 'Enabled' : 'Disabled', e.status,
+        ...(canSeeDocs ? [e.aadhaarMasked, e.panMasked] : []),
         ...(canSeeSalary ? [e.baseSalary] : [])];
     }),
   ]);
