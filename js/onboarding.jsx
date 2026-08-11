@@ -1269,7 +1269,46 @@ function PolicyLibrary({ user, manage }) {
   );
 }
 
+/* ---- Company Policies, as a destination ----
+   The library used to live only inside the HR onboarding queue, which meant
+   the people the documents are written for could not reach them. It is now a
+   page of its own that every role can open; the add/edit/version controls
+   appear only for `policy.edit`, so a Team Lead or an employee gets a clean
+   read-and-download view of exactly the same library. */
+function PoliciesPage({ user }) {
+  const store = useStore();
+  const canEdit = can(user, 'policy.edit');
+  const all = store.getPolicies();
+  const active = all.filter((p) => p.active);
+  const mustAck = active.filter((p) => p.acknowledgeRequired);
+
+  return (
+    <div className="space-y-4">
+      <PageHeader eyebrow="Workspace" title="Company policies & HR documents"
+        subtitle={canEdit
+          ? 'The company handbook, code of conduct and HR policies. Everything published here is visible to every employee.'
+          : 'The handbook, code of conduct and HR policies that apply to you. Read or download any document.'}>
+        <Badge tone="brand">{active.length} active</Badge>
+        {mustAck.length > 0 && <Badge tone="amber">{mustAck.length} need acknowledgement</Badge>}
+      </PageHeader>
+
+      {!canEdit && (
+        <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-start gap-2.5">
+          <Icon name="info" className="w-4 h-4 text-slate-400 shrink-0 mt-px"/>
+          <div className="text-[12px] text-slate-600 dark:text-slate-300">
+            These documents are maintained by <span className="font-semibold">HR and Admin</span>. If something looks
+            out of date, raise it with HR rather than editing it locally.
+          </div>
+        </div>
+      )}
+
+      <PolicyLibrary user={user} manage={canEdit}/>
+    </div>
+  );
+}
+
 Object.assign(window, {
+  PoliciesPage,
   OnboardingWizard, OfferLetterModal, SampleDocModal,
   EducationEditor, AddressFields, WizardSteps, formatAddress, blankEducation,
   PolicyLibrary, PolicyEditorModal, POLICY_CATEGORIES, COMPANY,

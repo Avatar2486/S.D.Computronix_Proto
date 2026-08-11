@@ -190,6 +190,7 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
      they run payroll, only an Admin sets it, and a Team Lead sees none of it. */
   const canSeePay = can(user, 'salary.view');
   const canSetPay = can(user, 'salary.edit');
+  const canSeeIncentive = can(user, 'incentive.view');
 
   const sites = store.getSites();
   const siteOptions = useMemo(() => [
@@ -394,7 +395,7 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
                   ['Bank', emp.bankVerified ? 'Verified ✓' : 'Not verified', 'wallet'],
                   ['Store', site ? site.name : (isOffice ? 'Head office' : 'Unassigned'), 'building'],
                   ['Zone / State', site ? `${site.zone || '—'} · ${site.region || '—'}` : '—', 'map'],
-                  ['Incentive basis', inc.slab.label, 'trending-up'],
+                  ...(canSeeIncentive ? [['Incentive basis', inc.slab.label, 'trending-up']] : []),
                 ].map(([k, v, i]) => infoTile(k, v, i))}
               </div>
 
@@ -541,7 +542,7 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                 <StatCard label="Present (Jul)" value={`${payslip.presentDays}/${payslip.workingDays}`} icon="check-circle" tone="green"/>
                 <StatCard label="Sales (Jul)" value={fmtINR(sales?.totalSales || 0)} icon="chart" tone="brand"/>
-                <StatCard label="Incentive (Jul)" value={fmtINR(inc.payout)} sub={inc.winner === 'target' ? 'Store target basis' : 'Slab basis'} icon="trending-up" tone="green"/>
+                {canSeeIncentive && <StatCard label="Incentive (Jul)" value={fmtINR(inc.payout)} sub={inc.winner === 'target' ? 'Store target basis' : 'Slab basis'} icon="trending-up" tone="green"/>}
                 {canSeePay && <StatCard label="Net pay (Jul)" value={fmtINR(payslip.netPay)} icon="wallet" tone="brand"/>}
               </div>
 
@@ -561,7 +562,7 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
               </Card>
 
               {/* Incentive rules for this employee */}
-              {!isOffice && (
+              {!isOffice && canSeeIncentive && (
                 <Card title="Employee incentive rules" bodyClass="p-3"
                   subtitle="Supplement the store slab · compared against the store target, higher wins"
                   right={<Badge tone="brand">{(emp.incentives || []).length} rule{(emp.incentives || []).length !== 1 ? 's' : ''}</Badge>}>
@@ -896,7 +897,7 @@ function RejectReasonModal({ emp, onClose, onConfirm }) {
 }
 
 /* ---- Onboarding queue (Employees ▸ Onboarding) ---- */
-function OnboardingQueue({ user, onOpen }) {
+function OnboardingQueue({ user, onOpen, onGoToPolicies }) {
   const store = useStore();
   const toast = useToast();
   const [rejecting, setRejecting] = useState(null);
@@ -1053,8 +1054,24 @@ function OnboardingQueue({ user, onOpen }) {
         </Card>
       )}
 
-      {/* Employees can read these during onboarding; HR and Admin manage them. */}
-      <PolicyLibrary user={user} manage={can(user, 'policy.edit')}/>
+      {/* The library itself now lives at Workspace ▸ Company Policies, where
+          every role can reach it. This is the pointer, not a second copy. */}
+      <Card noBody>
+        <div className="p-3 flex items-center gap-3 flex-wrap">
+          <div className="w-9 h-9 rounded-lg bg-brand-50 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300 flex items-center justify-center shrink-0">
+            <Icon name="book" className="w-4 h-4"/>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[12.5px] font-semibold text-slate-800 dark:text-slate-100">Company policies & HR documents</div>
+            <div className="text-[11.5px] text-slate-500">
+              {store.getPolicies().filter((p) => p.active).length} active documents · new joiners read and acknowledge these during onboarding.
+            </div>
+          </div>
+          {onGoToPolicies && (
+            <Btn size="sm" onClick={onGoToPolicies}>Open library<Icon name="chevron-right" className="w-3 h-3"/></Btn>
+          )}
+        </div>
+      </Card>
 
       <OfferLetterModal emp={offerFor} open={!!offerFor} onClose={() => setOfferFor(null)}/>
       {rejecting && <RejectReasonModal emp={rejecting} onClose={() => setRejecting(null)} onConfirm={doReject}/>}
@@ -1137,7 +1154,7 @@ function EmployeeDirectory({ user, list, onOpen, emptyTitle, emptyHint }) {
   );
 }
 
-function EmployeesPage({ user, navArg }) {
+function EmployeesPage({ user, navArg, onNavigate }) {
   const store = useStore();
   const [tab, setTab] = useState('existing');
   const [q, setQ] = useState('');
@@ -1200,11 +1217,20 @@ function EmployeesPage({ user, navArg }) {
   );
 
   /* Everyone in the directory: field staff plus office staff, since Employees is
-     now the central people area rather than a field-only roster. */
-  const everyone = useMemo(
-    () => store.state.employees.filter((e) => !isSiteMgr || e.siteId === user.siteId),
-    [store.state, isSiteMgr, user.siteId]
-  );
+     now the central people area rather than a field-only roster.
+
+     A Team Lead is the exception. Their roster is the technicians currently
+     working under them — not office staff, not applicants, and not people
+     still moving through onboarding. Hiring is not their job, so an
+     unapproved record is not theirs to see. */
+  const everyone = useMemo(() => {
+    if (!isSiteMgr) return store.state.employees;
+    return store.state.employees.filter((e) =>
+      e.siteId === user.siteId &&
+      e.role === 'field-employee' &&
+      e.status === 'active' &&
+      e.approvalStatus === 'approved');
+  }, [store.state, isSiteMgr, user.siteId]);
 
   const applyFilters = (base) => {
     let list = base;
@@ -1234,20 +1260,30 @@ function EmployeesPage({ user, navArg }) {
     return list;
   };
 
-  const existing = useMemo(() => applyFilters(everyone.filter((e) => e.status === 'active' && !store.isNewJoiner(e))), [everyone, f, q]);
+  /* With the three lifecycle tabs, "Existing" means established staff and new
+     joiners live in their own tab. A Team Lead has one list, so it holds their
+     whole team — splitting it would just hide half their technicians. */
+  const splitByTenure = can(user, 'employee.create') || can(user, 'document.upload') || isAdmin(user);
+  const existing = useMemo(
+    () => applyFilters(everyone.filter((e) => e.status === 'active' && (!splitByTenure || !store.isNewJoiner(e)))),
+    [everyone, f, q, splitByTenure]
+  );
   const newcomers = useMemo(() => applyFilters(everyone.filter((e) => store.isNewJoiner(e))), [everyone, f, q]);
   const pendingCount = store.state.employees.filter((e) => e.approvalStatus === 'pending-approval').length;
 
-  /* Onboarding is a queue you act on — create, upload, approve. A Team Lead
-     holds none of those, so the tab is not shown to them at all rather than
-     shown as a wall of buttons they cannot press. */
-  const showOnboarding = can(user, 'employee.create') || can(user, 'document.upload') || isAdmin(user);
-  const TABS = [
+  /* Onboarding is a queue you act on — create, upload, approve — and "New
+     employees" is the tail of that same intake. A Team Lead does neither, so
+     they get one list: their team. Everyone else keeps the three lifecycle
+     tabs. */
+  const showIntake = splitByTenure;
+  const TABS = showIntake ? [
     { id: 'existing',   label: 'Existing Employees', icon: 'users' },
     { id: 'new',        label: 'New Employees',      icon: 'sparkle', badge: newcomers.length },
-    ...(showOnboarding ? [{ id: 'onboarding', label: 'Onboarding', icon: 'shield', badge: pendingCount }] : []),
+    { id: 'onboarding', label: 'Onboarding',         icon: 'shield',  badge: pendingCount },
+  ] : [
+    { id: 'existing',   label: 'My team',            icon: 'users',   badge: everyone.length },
   ];
-  useEffect(() => { if (tab === 'onboarding' && !showOnboarding) setTab('existing'); }, [showOnboarding, tab]);
+  useEffect(() => { if (!showIntake && tab !== 'existing') setTab('existing'); }, [showIntake, tab]);
 
   /* Removable chips — one per active filter, so the current scope is always visible. */
   const chips = [];
@@ -1300,19 +1336,23 @@ function EmployeesPage({ user, navArg }) {
       <Tabs tabs={TABS} value={tab} onChange={setTab}/>
 
       {tab === 'onboarding' ? (
-        <OnboardingQueue user={user} onOpen={setSelected}/>
+        <OnboardingQueue user={user} onOpen={setSelected} onGoToPolicies={onNavigate ? () => onNavigate('policies') : null}/>
       ) : (
         <>
-          {/* Lifecycle legend — makes the Stage column self-explanatory */}
-          <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-500 dark:text-slate-400">
-            <span className="font-semibold uppercase tracking-wide text-[10px]">Lifecycle</span>
-            {Store.LIFECYCLE_STAGES.map((s, i) => (
-              <React.Fragment key={s.id}>
-                <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800">{s.label}</span>
-                {i < Store.LIFECYCLE_STAGES.length - 1 && <Icon name="chevron-right" className="w-3 h-3 text-slate-300"/>}
-              </React.Fragment>
-            ))}
-          </div>
+          {/* Lifecycle legend — explains the Stage column. Only meaningful
+              where records move through the intake; a Team Lead's list is all
+              Active by definition. */}
+          {showIntake && (
+            <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-500 dark:text-slate-400">
+              <span className="font-semibold uppercase tracking-wide text-[10px]">Lifecycle</span>
+              {Store.LIFECYCLE_STAGES.map((s, i) => (
+                <React.Fragment key={s.id}>
+                  <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800">{s.label}</span>
+                  {i < Store.LIFECYCLE_STAGES.length - 1 && <Icon name="chevron-right" className="w-3 h-3 text-slate-300"/>}
+                </React.Fragment>
+              ))}
+            </div>
+          )}
 
           <Card noBody>
             <div className="p-3 border-b border-slate-200 dark:border-slate-800 space-y-2">
@@ -1390,13 +1430,15 @@ function EmployeesPage({ user, navArg }) {
             </div>
 
             <div className="px-3 py-1.5 text-[11px] text-slate-500 border-b border-slate-100 dark:border-slate-800">
-              {tab === 'existing'
-                ? `${existing.length} established employee${existing.length === 1 ? '' : 's'} (joined more than 90 days ago)`
-                : `${newcomers.length} new employee${newcomers.length === 1 ? '' : 's'} — joined in the last 90 days or still moving through the lifecycle`}
+              {!showIntake
+                ? `${existing.length} active technician${existing.length === 1 ? '' : 's'} at ${store.getSite(user.siteId)?.name || 'your store'}`
+                : tab === 'existing'
+                  ? `${existing.length} established employee${existing.length === 1 ? '' : 's'} (joined more than 90 days ago)`
+                  : `${newcomers.length} new employee${newcomers.length === 1 ? '' : 's'} — joined in the last 90 days or still moving through the lifecycle`}
             </div>
 
             <EmployeeDirectory user={user} list={activeList} onOpen={setSelected}
-              emptyTitle={tab === 'existing' ? 'No established employees match' : 'No new employees'}
+              emptyTitle={!showIntake ? 'Nobody matches' : tab === 'existing' ? 'No established employees match' : 'No new employees'}
               emptyHint={tab === 'existing' ? 'Try clearing a filter chip above.' : 'Recent joiners and in-progress applications appear here.'}/>
           </Card>
         </>

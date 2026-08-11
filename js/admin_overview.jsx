@@ -180,7 +180,13 @@ function OverviewPage({ user, onNavigate }) {
   // Payroll/incentive figures use the last completed month (June) so deductions
   // reflect real full-month attendance, not partial in-progress July days.
   const payMonth = '2026-06';
-  const payslips = useMemo(() => emps.map((e) => store.computePayslip(e.id, payMonth)), [store.state, emps.length]);
+  const showMoney = canSeeMoney(user);
+  /* A payroll run over the whole roster is the most expensive thing on this
+     page, so it is not computed for a role that is not allowed to see it. */
+  const payslips = useMemo(
+    () => (showMoney ? emps.map((e) => store.computePayslip(e.id, payMonth)) : []),
+    [store.state, emps.length, showMoney]
+  );
   const payrollCost = payslips.reduce((s, p) => s + p.netPay, 0);
   const incentiveTotal = payslips.reduce((s, p) => s + p.incentive, 0);
 
@@ -207,14 +213,15 @@ function OverviewPage({ user, onNavigate }) {
       {/* Priority alerts lead the page — decisions before dashboards. */}
       <PriorityAlerts user={user} onNavigate={onNavigate} isSiteMgr={isSiteMgr}/>
 
-      {/* KPI row */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      {/* KPI row — the two payout tiles are earnings, so they are only shown
+          to roles that are allowed to see money at all. */}
+      <div className={`grid grid-cols-2 md:grid-cols-3 gap-3 ${showMoney ? 'lg:grid-cols-6' : 'lg:grid-cols-4'}`}>
         <StatCard label="Total field staff" value={emps.length} sub={`${sites.length} stores · ${(hierarchy.zones||[]).length} zones`} icon="users" tone="brand"/>
         <StatCard label="Present today" value={presentToday} sub={`${pctOf(presentToday, emps.length)}% attendance`} icon="check-circle" tone="green"/>
         <StatCard label="Absent today" value={absentToday} sub={absentToday > 0 ? 'Regularisable' : 'None'} icon="calendar" tone="amber"/>
         <StatCard label="Out of geo-fence" value={outFence} sub={outFence > 0 ? 'Alert raised' : 'All within fence'} icon="alert" tone={outFence > 0 ? 'red' : 'slate'}/>
-        <StatCard label="Payroll (Jun)" value={fmtINR(payrollCost)} sub="Last processed net payout" icon="wallet" tone="brand"/>
-        <StatCard label="Incentives (Jun)" value={fmtINR(incentiveTotal)} sub="Higher of target or slab" icon="trending-up" tone="green"/>
+        {showMoney && <StatCard label="Payroll (Jun)" value={fmtINR(payrollCost)} sub="Last processed net payout" icon="wallet" tone="brand"/>}
+        {showMoney && <StatCard label="Incentives (Jun)" value={fmtINR(incentiveTotal)} sub="Higher of target or slab" icon="trending-up" tone="green"/>}
       </div>
 
       {/* Live map + zone mix */}
@@ -254,7 +261,9 @@ function OverviewPage({ user, onNavigate }) {
           <Card title="Top performers · July" subtitle="By monthly sales" bodyClass="p-0">
             {[...emps].sort((a,b) => (store.getSales(b.id, july)?.totalSales || 0) - (store.getSales(a.id, july)?.totalSales || 0)).slice(0, 5).map((e, i) => {
               const sales = store.getSales(e.id, july)?.totalSales || 0;
-              const inc = store.calcIncentive(sales, e, july);
+              // Sales is performance, which a Team Lead needs; the incentive it
+              // earns is pay, which they do not see.
+              const inc = showMoney ? store.calcIncentive(sales, e, july) : null;
               const max = 250000;
               return (
                 <div key={e.id} className="p-3 flex items-center gap-3 border-b border-slate-100 dark:border-slate-800 last:border-0">
@@ -266,7 +275,7 @@ function OverviewPage({ user, onNavigate }) {
                   </div>
                   <div className="text-right shrink-0">
                     <div className="text-[12px] font-bold text-slate-800 dark:text-slate-100">{fmtINR(sales)}</div>
-                    <div className="text-[10px] text-emerald-600 font-semibold">+{fmtINR(inc.payout)}</div>
+                    {inc && <div className="text-[10px] text-emerald-600 font-semibold">+{fmtINR(inc.payout)}</div>}
                   </div>
                 </div>
               );

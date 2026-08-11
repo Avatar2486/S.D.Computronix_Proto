@@ -236,8 +236,15 @@ function ReportsPage({ user, navArg }) {
     return out;
   }, [emps.length, month, attTotalPresent, attTotalWorking]);
 
-  // ---- Payroll ----
-  const payslips = useMemo(() => emps.map((e) => store.computePayslip(e.id, month)), [emps, month, store.state]);
+  /* ---- Payroll ----
+     Skipped entirely for a role that cannot open the tab — a payroll run over
+     the filtered population is the most expensive thing on this page. */
+  const showPay = can(user, 'salary.view');
+  const showIncentive = can(user, 'incentive.view');
+  const payslips = useMemo(
+    () => (showPay ? emps.map((e) => store.computePayslip(e.id, month)) : []),
+    [emps, month, store.state, showPay]
+  );
   const totalNet = payslips.reduce((s, p) => s + p.netPay, 0);
   const totalDed = payslips.reduce((s, p) => s + p.absenceDeduction + p.statutory.pf + p.statutory.esic + p.statutory.pt, 0);
   const totalInc = payslips.reduce((s, p) => s + p.incentive, 0);
@@ -251,10 +258,10 @@ function ReportsPage({ user, navArg }) {
     { label: '₹4k+',         test: (v) => v > 4000 },
   ];
   const slabColors = ['#CBD5E1','#93C5FD','#3B82F6','#1E40AF'];
-  const incRows = useMemo(() => emps.map((e) => {
+  const incRows = useMemo(() => (showIncentive ? emps.map((e) => {
     const s = store.getSales(e.id, month)?.totalSales || 0;
     return { emp: e, sales: s, inc: store.calcIncentive(s, e, month) };
-  }), [emps, month, store.state]);
+  }) : []), [emps, month, store.state, showIncentive]);
   const slabDist = incBuckets.map((b, i) => ({ label: b.label, value: incRows.filter((r) => b.test(r.inc.payout)).length, color: slabColors[i % slabColors.length] }));
 
   // ---- Deployment ----
@@ -265,16 +272,20 @@ function ReportsPage({ user, navArg }) {
     .filter((s) => s.staffCount > 0)
     .sort((a, b) => b.staffCount - a.staffCount);
 
-  /* The payroll report is base salary and net pay, so it follows the same
-     permission as the salary column everywhere else: HR and Admin only. */
+  /* Payroll and Incentive are both earnings reports, so they follow the same
+     permissions as the figures they contain: HR and Admin only. Attendance and
+     Deployment are operational and stay open to a Team Lead. */
   const canSeePay = can(user, 'salary.view');
+  const canSeeIncentive = can(user, 'incentive.view');
   const TABS = [
     { id: 'attendance', label: 'Attendance', icon: 'calendar' },
     ...(canSeePay ? [{ id: 'payroll', label: 'Payroll', icon: 'wallet' }] : []),
-    { id: 'incentive',  label: 'Incentive',  icon: 'trending-up' },
+    ...(canSeeIncentive ? [{ id: 'incentive', label: 'Incentive', icon: 'trending-up' }] : []),
     { id: 'deployment', label: 'Deployment', icon: 'map' },
   ];
-  useEffect(() => { if (tab === 'payroll' && !canSeePay) setTab('attendance'); }, [canSeePay, tab]);
+  useEffect(() => {
+    if (!TABS.some((t) => t.id === tab)) setTab('attendance');
+  }, [canSeePay, canSeeIncentive, tab]);
   // Opened from a sidebar sub-item.
   useEffect(() => {
     if (navArg && navArg.tab && TABS.some((t) => t.id === navArg.tab)) setTab(navArg.tab);

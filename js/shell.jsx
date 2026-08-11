@@ -379,14 +379,19 @@ function TopBar({ user, onSwitch, dark, setDark, onReset, viewMode, setViewMode,
    rather than being a label you then have to go and click again. */
 const NAV_ITEMS = [
   { id: 'overview',  section: 'Workspace',  label: 'Dashboard',    icon: 'home',        roles: ['admin','hr-manager','site-manager'] },
+  /* The policy library is company-wide reading, so it is a destination of its
+     own rather than something buried in the HR onboarding queue. Everyone can
+     open it; only HR and Admin see the editing controls inside. */
+  { id: 'policies',  section: 'Workspace',  label: 'Company Policies', icon: 'book',    roles: ['admin','hr-manager','site-manager'] },
 
   { id: 'employees', section: 'People',     label: 'Employees',    icon: 'users',       roles: ['admin','hr-manager','site-manager'],
-    // Onboarding is an HR/Admin queue, so it is not advertised to a Team Lead.
-    sub: (role) => [
+    /* Intake is HR/Admin work. A Team Lead gets one list — their own
+       technicians — so there is nothing to sub-divide. */
+    sub: (role) => (role === 'site-manager' ? [] : [
       { id: 'existing', label: 'Existing' },
       { id: 'new', label: 'New' },
-      ...(role === 'site-manager' ? [] : [{ id: 'onboarding', label: 'Onboarding' }]),
-    ],
+      { id: 'onboarding', label: 'Onboarding' },
+    ]),
     badge: (s) => s.getEmployees({ status: 'pending' }).length },
   { id: 'attendance', section: 'People',    label: 'Attendance',   icon: 'calendar',    roles: ['admin','hr-manager','site-manager'],
     sub: [
@@ -406,11 +411,12 @@ const NAV_ITEMS = [
       { id: 'travel', label: 'Travel Allowance' },
       { id: 'incentive', label: 'Incentive' },
     ] },
-  { id: 'incentives', section: 'Compensation', label: 'Incentives', icon: 'trending-up', roles: ['admin','hr-manager','site-manager'],
-    sub: (role) => [
+  // Incentive is pay, so it sits behind the same wall as payroll.
+  { id: 'incentives', section: 'Compensation', label: 'Incentives', icon: 'trending-up', roles: ['admin','hr-manager'],
+    sub: [
       { id: 'dashboard', label: 'Dashboard' },
       { id: 'stores', label: 'By store' },
-      ...(role === 'site-manager' ? [] : [{ id: 'config', label: 'Configuration' }]),
+      { id: 'config', label: 'Configuration' },
     ] },
 
   { id: 'sites',     section: 'Operations', label: 'Client Sites', icon: 'building',    roles: ['admin','hr-manager'],
@@ -422,8 +428,8 @@ const NAV_ITEMS = [
   { id: 'reports',   section: 'Operations', label: 'Reports',      icon: 'chart',       roles: ['admin','hr-manager','site-manager'],
     sub: (role) => [
       { id: 'attendance', label: 'Attendance' },
-      ...(role === 'site-manager' ? [] : [{ id: 'payroll', label: 'Payroll' }]),
-      { id: 'incentive', label: 'Incentive' },
+      // Payroll and Incentive are both earnings reports.
+      ...(role === 'site-manager' ? [] : [{ id: 'payroll', label: 'Payroll' }, { id: 'incentive', label: 'Incentive' }]),
       { id: 'deployment', label: 'Deployment' },
     ] },
 ];
@@ -530,7 +536,8 @@ function AdminApp({ user, splitMode, nav, navArg, setNav, mobileNavOpen, setMobi
   const view = (() => {
     switch (nav) {
       case 'overview':     return <OverviewPage user={user} onNavigate={setNav}/>;
-      case 'employees':    return <EmployeesPage user={user} navArg={arg}/>;
+      case 'policies':     return <PoliciesPage user={user}/>;
+      case 'employees':    return <EmployeesPage user={user} navArg={arg} onNavigate={setNav}/>;
       case 'attendance':   return <AttendancePage user={user} navArg={arg}/>;
       case 'livemap':      return <LiveMapPage user={user}/>;
       case 'payroll':      return <PayrollPage user={user} navArg={arg}/>;

@@ -1,5 +1,100 @@
 /* Mobile profile: personal info, documents, incentive detail */
-function MobileProfile({ emp: empProp, onLogout, onTour, onOpenDocs }) {
+/* ---- Company policies, on the phone ----
+   The handbook and HR policies are written for the people who carry this app,
+   so they have to be readable from it. Read-only by construction: there is no
+   edit path here at all, and editing lives with HR and Admin on the desktop. */
+function MobilePoliciesSheet({ onClose }) {
+  const store = useStore();
+  const toast = useToast();
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(null);
+  const list = store.getPolicies().filter((p) => p.active)
+    .filter((p) => !q || `${p.title} ${p.category} ${p.summary}`.toLowerCase().includes(q.toLowerCase()));
+
+  return (
+    <div className="absolute inset-0 z-[5] bg-white dark:bg-slate-900 flex flex-col anim-in">
+      <div className="pt-9 px-4 pb-3 border-b border-slate-200 dark:border-slate-800 shrink-0">
+        <div className="flex items-center gap-2">
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-600 dark:text-slate-300">
+            <Icon name="chevron-left" className="w-4 h-4"/>
+          </button>
+          <div className="min-w-0">
+            <div className="text-[14px] font-bold text-slate-900 dark:text-white">Company Policies</div>
+            <div className="text-[10px] text-slate-500">Maintained by HR · read and download</div>
+          </div>
+        </div>
+        <div className="mt-3 flex items-center gap-1.5 h-9 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
+          <Icon name="search" className="w-3.5 h-3.5 text-slate-400"/>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search policies…"
+            className="flex-1 min-w-0 bg-transparent text-[12px] outline-none dark:text-slate-100"/>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+        {list.length === 0 && (
+          <div className="p-8 text-center text-[11px] text-slate-500">
+            {q ? 'Nothing matches that search.' : 'No policies published yet.'}
+          </div>
+        )}
+        {list.map((p) => (
+          <button key={p.id} onClick={() => setOpen(p)}
+            className="w-full text-left rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 flex gap-2.5 hover:border-brand-400 transition">
+            <div className="w-9 h-9 rounded-lg bg-brand-50 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300 flex items-center justify-center shrink-0">
+              <Icon name="book" className="w-4 h-4"/>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[12px] font-bold text-slate-900 dark:text-white truncate">{p.title}</div>
+              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                <Badge tone="slate">{p.category}</Badge>
+                <Badge tone="brand">v{p.version}</Badge>
+                {p.acknowledgeRequired && <Badge tone="amber">Acknowledge</Badge>}
+              </div>
+              <div className="text-[10.5px] text-slate-500 mt-1 line-clamp-2 leading-snug">{p.summary}</div>
+            </div>
+            <Icon name="chevron-right" className="w-4 h-4 text-slate-300 shrink-0 self-center"/>
+          </button>
+        ))}
+      </div>
+
+      {open && (
+        <div className="absolute inset-0 z-40 bg-slate-900/70 backdrop-blur-sm flex items-end" onClick={() => setOpen(null)}>
+          <div className="w-full bg-white dark:bg-slate-900 rounded-t-2xl max-h-[88%] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="sticky top-0 bg-white dark:bg-slate-900 px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[13px] font-bold text-slate-900 dark:text-white">{open.title}</div>
+                <div className="text-[10px] text-slate-500">{open.category} · v{open.version} · updated {fmtDate(open.updatedAt, { year: true })}</div>
+              </div>
+              <button onClick={() => setOpen(null)} className="w-8 h-8 shrink-0 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500">
+                <Icon name="x" className="w-4 h-4"/>
+              </button>
+            </div>
+            <div className="p-4 space-y-3">
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 text-[11.5px] text-slate-700 dark:text-slate-200 leading-relaxed">
+                {open.summary}
+              </div>
+              <div className="rounded-xl border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-800 text-[11px]">
+                {[['Document', open.fileName], ['Version', 'v' + open.version],
+                  ['Acknowledgement', open.acknowledgeRequired ? 'Required during onboarding' : 'Not required'],
+                  ['Updated by', open.updatedBy]].map(([k, v]) => (
+                  <div key={k} className="px-3 py-2 flex justify-between gap-3">
+                    <span className="text-slate-500 shrink-0">{k}</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-100 text-right truncate">{v}</span>
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => toast(`Downloading ${open.fileName}`, 'info')}
+                className="w-full h-10 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-[13px] font-semibold flex items-center justify-center gap-2">
+                <Icon name="download" className="w-4 h-4"/>Download PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MobileProfile({ emp: empProp, onLogout, onTour, onOpenDocs, onOpenPolicies }) {
   const store = useStore();
   /* Read the live record so document uploads reflect immediately. */
   const emp = store.getEmployee(empProp.id) || empProp;
@@ -136,6 +231,21 @@ function MobileProfile({ emp: empProp, onLogout, onTour, onOpenDocs }) {
         </button>
       </div>
 
+      {/* Company policies — the same library HR maintains, read-only here */}
+      <button onClick={() => onOpenPolicies && onOpenPolicies()}
+        className="w-full rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-3 flex items-center gap-3 text-left hover:border-brand-400 transition">
+        <div className="w-9 h-9 rounded-lg bg-brand-50 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300 flex items-center justify-center shrink-0">
+          <Icon name="book" className="w-4 h-4"/>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[12px] font-bold text-slate-800 dark:text-white">Company Policies</div>
+          <div className="text-[10px] text-slate-500">
+            {store.getPolicies().filter((p) => p.active).length} documents · handbook, code of conduct, leave, payroll
+          </div>
+        </div>
+        <Icon name="chevron-right" className="w-4 h-4 text-slate-300 shrink-0"/>
+      </button>
+
       {/* Account actions */}
       <div className="space-y-2 pt-1">
         <button onClick={() => onTour && onTour()} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold text-[13px] hover:bg-slate-50 dark:hover:bg-slate-700">
@@ -151,4 +261,4 @@ function MobileProfile({ emp: empProp, onLogout, onTour, onOpenDocs }) {
   );
 }
 
-Object.assign(window, { MobileProfile });
+Object.assign(window, { MobileProfile, MobilePoliciesSheet });

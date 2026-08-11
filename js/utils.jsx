@@ -738,21 +738,27 @@ const ROLE_SHORT = {
 /* Single source of truth for "may this role do this?".
    The UI hides actions rather than showing them disabled, so a Team Lead never
    sees a payroll button they cannot press. */
-/* Pay is split into two permissions on purpose.
+/* Money is its own axis, split three ways.
 
-     salary.view — HR and Admin. HR runs payroll, so they have to see the
-                   figure; a Team Lead has no reason to know what the people
-                   in their store are paid, so they never see it at all.
-     salary.edit — Admin only. Setting someone's pay is the decision, and it
-                   stays with the role that owns approvals. */
+     salary.view    — HR and Admin. HR runs payroll and has to see the figure.
+     salary.edit    — Admin only. Setting someone's pay is the decision, and it
+                      stays with the role that owns approvals.
+     incentive.view — HR and Admin. Incentive is pay by another name.
+
+   A Team Lead holds none of them. They run a store's day — attendance, sales
+   performance, recognition — and never see what anyone earns. `money.view` is
+   the coarse gate for anywhere a rupee figure about a person's earnings would
+   otherwise appear. */
+const MONEY_ACTIONS = ['salary.view', 'incentive.view', 'payroll.view'];
+
 const PERMISSIONS = {
   'admin':          ['*'],
   'hr-manager':     ['employee.view','employee.create','employee.edit','employee.submit','document.upload','designation.edit','geofence.edit',
                      'salary.view','attendance.view','attendance.decide','payroll.view','incentive.view','incentive.edit','target.view','target.edit',
                      'site.view','policy.view','policy.edit','report.view','kudos.send'],
-  /* Team Lead: read their store, recognise their people, nothing that writes to
-     a personnel record, decides a correction, or reveals pay. */
-  'site-manager':   ['employee.view','attendance.view','incentive.view','target.view','site.view','policy.view','report.view','kudos.send'],
+  /* Team Lead: read their own technicians, nothing that writes to a personnel
+     record, decides a correction, or reveals earnings. */
+  'site-manager':   ['employee.view','attendance.view','target.view','site.view','policy.view','report.view','kudos.send'],
   'field-employee': ['policy.view'],
 };
 function can(user, action) {
@@ -760,6 +766,9 @@ function can(user, action) {
   const list = PERMISSIONS[roleOf(user)] || [];
   return list.includes('*') || list.includes(action);
 }
+/* "Is this person allowed to see money at all?" — one call for the many places
+   a payout, a payslip total or an incentive amount would otherwise leak. */
+const canSeeMoney = (user) => MONEY_ACTIONS.some((a) => can(user, a));
 // Only an Admin's own records skip the approval queue.
 const isAdmin = (user) => roleOf(user) === 'admin';
 // Kept under the old name so existing call sites keep reading naturally.
@@ -909,5 +918,5 @@ Object.assign(window, {
   Tabs, PageHeader, StatusBadge, STATUS_TONES, FilterBar, FilterChips, PhotoUpload, EmailField,
   IncentiveAmount, ProgressBar, Pagination, TimeInput,
   useLeafletMap, MapUnavailable, hasLeaflet, fmtHHMM, fmtDuration,
-  downloadCSV, ROLE_LABEL, ROLE_SHORT, PERMISSIONS, can, roleOf, isAdmin, isSuperAdmin, useConfirm,
+  downloadCSV, ROLE_LABEL, ROLE_SHORT, PERMISSIONS, MONEY_ACTIONS, can, canSeeMoney, roleOf, isAdmin, isSuperAdmin, useConfirm,
 });

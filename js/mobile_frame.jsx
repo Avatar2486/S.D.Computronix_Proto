@@ -36,6 +36,7 @@ function PhoneApp({ user, onLogout }) {
   const unread = notifs.filter((n) => !n.read).length;
   const [notifOpen, setNotifOpen] = useState(false);
   const [docsOpen, setDocsOpen] = useState(false);
+  const [policiesOpen, setPoliciesOpen] = useState(false);
   // In-app tour — auto-opens once for real field-employee logins.
   const [tourOpen, setTourOpen] = useState(() => {
     if (!isEmp) return false;
@@ -45,7 +46,7 @@ function PhoneApp({ user, onLogout }) {
 
   const signOut = () => {
     setPhoneUser(null); setAuth(null); setTab('home');
-    setNotifOpen(false); setDocsOpen(false); setTourOpen(false);
+    setNotifOpen(false); setDocsOpen(false); setPoliciesOpen(false); setTourOpen(false);
   };
 
   /* ---- Logged out: login / self-onboarding / application status ---- */
@@ -80,7 +81,7 @@ function PhoneApp({ user, onLogout }) {
       case 'attendance': return <MobileAttendance emp={emp}/>;
       case 'payslips':   return <MobilePayslips emp={emp}/>;
       case 'gigs':       return <MobileGigs emp={emp}/>;
-      case 'profile':    return <MobileProfile emp={emp} onLogout={signOut} onTour={() => setTourOpen(true)} onOpenDocs={() => setDocsOpen(true)}/>;
+      case 'profile':    return <MobileProfile emp={emp} onLogout={signOut} onTour={() => setTourOpen(true)} onOpenDocs={() => setDocsOpen(true)} onOpenPolicies={() => setPoliciesOpen(true)}/>;
       default:           return <MobileHome emp={emp} setTab={setTab}/>;
     }
   })();
@@ -131,6 +132,7 @@ function PhoneApp({ user, onLogout }) {
       </div>
 
       {docsOpen && <MobileDocsSheet emp={emp} onClose={() => setDocsOpen(false)}/>}
+      {policiesOpen && <MobilePoliciesSheet onClose={() => setPoliciesOpen(false)}/>}
       {notifOpen && <MobileNotifPanel emp={emp} onClose={() => setNotifOpen(false)}/>}
       {tourOpen && <TourOverlay mobile steps={MOBILE_TOUR_STEPS} onNavigate={setTab} onClose={closeTour}/>}
     </PhoneFrame>
