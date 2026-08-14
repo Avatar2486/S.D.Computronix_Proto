@@ -245,6 +245,7 @@ function ReportsPage({ user, navArg }) {
     () => (showPay ? emps.map((e) => store.computePayslip(e.id, month)) : []),
     [emps, month, store.state, showPay]
   );
+  const payrollRun = showPay ? store.getPayrollRun(month) : null;
   const totalNet = payslips.reduce((s, p) => s + p.netPay, 0);
   const totalDed = payslips.reduce((s, p) => s + p.absenceDeduction + p.statutory.pf + p.statutory.esic + p.statutory.pt, 0);
   const totalInc = payslips.reduce((s, p) => s + p.incentive, 0);
@@ -291,9 +292,23 @@ function ReportsPage({ user, navArg }) {
     if (navArg && navArg.tab && TABS.some((t) => t.id === navArg.tab)) setTab(navArg.tab);
   }, [navArg && navArg._n]);
 
+  /* Every export carries its own provenance — which report, which period,
+     which filters were in force, when it was generated and how many rows it
+     holds — so a CSV pulled out of context (emailed, dropped in a shared
+     drive) is still self-explanatory instead of a bare, unlabeled grid. */
+  const exportMeta = (reportLabel, rowCount) => [
+    [`${reportLabel} · S.D. Computronix HRMS`],
+    [`Period: ${fmtDate(f.from)} – ${fmtDate(f.to)} (${fmtMonth(month)} figures)`],
+    [`Filters: ${chips.length ? chips.map((c) => c.label).join(' | ') : 'None (all in scope)'}`],
+    [`Generated: ${fmtDateTime(new Date().toISOString())} by ${user.name || user.role}`],
+    [`Rows: ${rowCount}`],
+    [],
+  ];
+
   const exportCurrent = () => {
     if (tab === 'attendance') {
       downloadCSV(`report_attendance_${month}.csv`, [
+        ...exportMeta('Attendance report', attRows.length),
         ['Code','Name','Designation','Type','Store','City','Working','Present','Absent','Attendance %'],
         ...attRows.map((r) => [r.emp.code, r.emp.name, r.emp.designation, r.emp.employeeType,
           store.getSite(r.emp.siteId)?.name || '', store.getSite(r.emp.siteId)?.city || '',
@@ -301,6 +316,9 @@ function ReportsPage({ user, navArg }) {
       ]);
     } else if (tab === 'payroll') {
       downloadCSV(`report_payroll_${month}.csv`, [
+        ...exportMeta('Payroll report', payslips.length),
+        [`Payroll run status: ${payrollRun ? PAYROLL_STATE_LABEL[payrollRun.status] : 'No run started — live projection, not final'}`],
+        [],
         ['Code','Name','Store','Base','Absence deduction','PF','ESIC','PT','Incentive','Travel','Net pay'],
         ...payslips.map((p) => {
           const e = store.getEmployee(p.employeeId);
@@ -310,6 +328,7 @@ function ReportsPage({ user, navArg }) {
       ]);
     } else if (tab === 'incentive') {
       downloadCSV(`report_incentive_${month}.csv`, [
+        ...exportMeta('Incentive report', incRows.length),
         ['Code','Name','Store','Sales','Basis','Slab / target','Maximum eligible','Incentive'],
         ...incRows.map((r) => [r.emp.code, r.emp.name, store.getSite(r.emp.siteId)?.name || '', r.sales,
           r.inc.winner === 'target' ? 'Store target' : 'Incentive slab', r.inc.slab.label,
@@ -317,6 +336,7 @@ function ReportsPage({ user, navArg }) {
       ]);
     } else {
       downloadCSV('report_deployment.csv', [
+        ...exportMeta('Deployment report', sitesWithCount.length),
         ['Code','Store','City','State','Zone','Team Lead','Business Manager','Staff'],
         ...sitesWithCount.map((s) => [s.code, s.name, s.city, s.region, s.zone, s.cm, s.bm, s.staffCount]),
       ]);
@@ -372,7 +392,7 @@ function ReportsPage({ user, navArg }) {
                       const pct = pctOf(r.presentDays, r.workingDays);
                       return (
                         <tr key={r.emp.id}>
-                          <td><div className="flex items-center gap-2 min-w-0"><Avatar emp={r.emp} size={24}/><span className="truncate font-semibold">{r.emp.name}</span></div></td>
+                          <td><EmployeeIdentity emp={r.emp} subtitle="code"/></td>
                           <td className="text-[11.5px] text-slate-600 dark:text-slate-300 truncate max-w-[130px]">{r.emp.designation}</td>
                           <td className="text-[11px] text-slate-500 truncate max-w-[160px]">{store.getSite(r.emp.siteId)?.name || '—'}</td>
                           <td className="text-right font-mono">{r.workingDays}</td>
@@ -398,6 +418,25 @@ function ReportsPage({ user, navArg }) {
 
       {emps.length > 0 && tab === 'payroll' && (
         <div className="grid grid-cols-12 gap-4">
+          <div className="col-span-12">
+            <Card bodyClass="p-3 flex items-center gap-2.5 flex-wrap">
+              {payrollRun ? (
+                <>
+                  <StatusBadge status={payrollRun.status} label={PAYROLL_STATE_LABEL[payrollRun.status]}/>
+                  <span className="text-[12px] text-slate-500 dark:text-slate-400">
+                    {fmtMonth(month)} payroll run — figures below reflect this run's numbers as they stand right now.
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Badge tone="amber">Live projection</Badge>
+                  <span className="text-[12px] text-slate-500 dark:text-slate-400">
+                    No payroll run has been started for {fmtMonth(month)} yet — these figures are computed live and are not final.
+                  </span>
+                </>
+              )}
+            </Card>
+          </div>
           <div className="col-span-12 md:col-span-3"><StatCard label="Total net payout" value={fmtINR(totalNet)} tone="brand" icon="wallet"/></div>
           <div className="col-span-12 md:col-span-3"><StatCard label="Total deductions" value={fmtINR(totalDed)} tone="red" icon="alert"/></div>
           <div className="col-span-12 md:col-span-3"><StatCard label="Total incentives" value={fmtINR(totalInc)} tone="green" icon="trending-up"/></div>
@@ -470,13 +509,9 @@ function ReportsPage({ user, navArg }) {
                   <tbody>
                     {[...incRows].sort((a, b) => b.inc.payout - a.inc.payout).slice(0, 80).map((r) => (
                       <tr key={r.emp.id}>
-                        <td><div className="flex items-center gap-2 min-w-0"><Avatar emp={r.emp} size={24}/><span className="truncate font-semibold">{r.emp.name}</span></div></td>
+                        <td><EmployeeIdentity emp={r.emp} subtitle="code"/></td>
                         <td className="text-right font-mono">{fmtINRShort(r.sales)}</td>
-                        <td>
-                          <Badge tone={r.inc.winner === 'target' ? 'brand' : 'violet'}>
-                            {r.inc.winner === 'target' ? 'Store target' : 'Slab'}
-                          </Badge>
-                        </td>
+                        <td><IncentiveWinnerBadge detail={r.inc}/></td>
                         <td className="text-right font-mono text-slate-500">{fmtINR(r.inc.maxEligible || r.inc.payout)}</td>
                         <td className="text-right font-mono font-bold text-emerald-700 dark:text-emerald-400">{fmtINR(r.inc.payout)}</td>
                       </tr>
@@ -503,8 +538,8 @@ function ReportsPage({ user, navArg }) {
                 <div key={s.id} className="p-3 border-b border-slate-100 dark:border-slate-800 last:border-0">
                   <div className="flex items-center justify-between mb-1.5 gap-2">
                     <div className="min-w-0">
-                      <div className="text-[12px] font-semibold text-slate-800 dark:text-slate-100 truncate">{s.name}</div>
-                      <div className="text-[10px] text-slate-500">{s.city} · {s.zone} · TL {s.cm || '—'}</div>
+                      <StoreIdentity site={s} showZone/>
+                      <div className="text-[10px] text-slate-500">TL {s.cm || '—'}</div>
                     </div>
                     <Badge tone="brand">{s.staffCount} staff</Badge>
                   </div>

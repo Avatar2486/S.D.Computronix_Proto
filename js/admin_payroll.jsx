@@ -1,4 +1,76 @@
 /* Payroll: month view, payslip modal, CSV export */
+const PAYROLL_STATE_LABEL = { draft: 'Draft / Preview', reviewed: 'Reviewed', approved: 'Approved', processed: 'Processed', paid: 'Paid', locked: 'Locked' };
+
+/* One button at a time — the state machine only ever advances one step, so
+   there is never a choice of "which stage next", just "advance, or don't".
+   HR can move a run into Reviewed; everything after that is Admin-only, and
+   the button for a step HR can't take is hidden (not just disabled) with an
+   explanatory line instead, matching the read-only convention used
+   everywhere else money-adjacent is gated. */
+function PayrollStateBar({ month, run, user }) {
+  const toast = useToast();
+  const status = run ? run.status : null;
+  const idx = status ? Store.PAYROLL_STATES.indexOf(status) : -1;
+  const next = Store.PAYROLL_STATES[idx + 1];
+  const isAdminActor = isSuperAdmin(user);
+  const nextNeedsAdmin = next && ['approved', 'processed', 'paid', 'locked'].includes(next);
+  const canAdvance = next && (nextNeedsAdmin ? isAdminActor : can(user, 'payroll.review'));
+
+  const advance = () => {
+    const res = Store.transitionPayroll(month, next, user);
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    toast(`${fmtMonth(month)} payroll moved to ${PAYROLL_STATE_LABEL[next]}`, 'success');
+  };
+
+  return (
+    <Card bodyClass="p-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          {Store.PAYROLL_STATES.map((s, i) => (
+            <React.Fragment key={s}>
+              <div className={`flex items-center gap-1.5 text-[11.5px] font-semibold px-2 py-1 rounded-md ${
+                i === idx ? 'bg-brand-700 text-white' : i < idx ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-400'}`}>
+                {i < idx ? <Icon name="check-circle" className="w-3.5 h-3.5"/> : i === idx ? <Icon name="clock" className="w-3.5 h-3.5"/> : <span className="w-3.5 h-3.5 rounded-full border border-current inline-block"/>}
+                {PAYROLL_STATE_LABEL[s]}
+              </div>
+              {i < Store.PAYROLL_STATES.length - 1 && <div className={`w-6 h-px ${i < idx ? 'bg-emerald-400' : 'bg-slate-200 dark:bg-slate-700'}`}/>}
+            </React.Fragment>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          {isPeriodLockedNote(status)}
+          {next && canAdvance && (
+            <Btn size="sm" variant={nextNeedsAdmin ? 'success' : 'primary'} onClick={advance}>
+              <Icon name="chevron-right" className="w-3.5 h-3.5"/>Move to {PAYROLL_STATE_LABEL[next]}
+            </Btn>
+          )}
+          {next && !canAdvance && (
+            <span className="text-[11px] text-slate-400 italic">
+              {nextNeedsAdmin ? `Only Admin can move to ${PAYROLL_STATE_LABEL[next]}` : 'HR/Admin required to review'}
+            </span>
+          )}
+          {!next && <Badge tone="slate"><Icon name="lock" className="w-3 h-3"/>Fully locked</Badge>}
+        </div>
+      </div>
+      {run && (
+        <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+          {run.history.map((h, i) => (
+            <span key={i}>{PAYROLL_STATE_LABEL[h.status]} · {h.by || 'system'} · {fmtDateTime(h.at)}</span>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+function isPeriodLockedNote(status) {
+  if (!['processed', 'paid', 'locked'].includes(status)) return null;
+  return (
+    <span className="text-[11px] text-amber-700 dark:text-amber-300 flex items-center gap-1">
+      <Icon name="lock" className="w-3.5 h-3.5"/>Salary and attendance regularisation are frozen for this period.
+    </span>
+  );
+}
+
 function PayslipModal({ payslip, emp, onClose }) {
   const [showCalc, setShowCalc] = useState(false);
   if (!payslip || !emp) return null;
@@ -18,9 +90,10 @@ function PayslipModal({ payslip, emp, onClose }) {
           ['Employee', emp.name], ['Code', emp.code], ['Month', payslip.month],
           ['Working days', payslip.workingDays], ['Present', payslip.presentDays], ['Absent', payslip.absentDays],
           ['Base', payslip.base], ['Absence deduction', payslip.absenceDeduction],
-          ['PF', payslip.statutory.pf], ['ESIC', payslip.statutory.esic], ['PT', payslip.statutory.pt],
+          ['PF', payslip.statutory.pfApplicable ? payslip.statutory.pf : 'Not applicable'], ['ESIC', payslip.statutory.esic], ['PT', payslip.statutory.pt],
+          ['TDS', payslip.statutory.tdsApplicable ? payslip.statutory.tds : 'Not applicable'],
           ['Sales', payslip.sales], ['Incentive', payslip.incentive], ['Travel allowance', payslip.travelAllowance],
-          ['Net pay', payslip.netPay],
+          ['Net pay', payslip.netPay], ['Payroll status', payslip.payrollStatus],
         ])}><Icon name="download" className="w-3.5 h-3.5"/>Export CSV</Btn>
         <Btn variant="primary" onClick={onClose}>Close</Btn>
       </>}>
@@ -105,10 +178,17 @@ function PayslipModal({ payslip, emp, onClose }) {
             <table className="w-full text-[12px]">
               <tbody>
                 <tr className="border-b border-slate-200"><td className="py-1.5">Absence deduction ({payslip.absentDays} × ₹{Math.round(payslip.base/payslip.workingDays)})</td><td className="text-right font-mono font-semibold text-rose-700">− {fmtINR(payslip.absenceDeduction)}</td></tr>
-                <tr className="border-b border-slate-200"><td className="py-1.5">PF (12%)</td><td className="text-right font-mono">− {fmtINR(payslip.statutory.pf)}</td></tr>
+                <tr className="border-b border-slate-200">
+                  <td className="py-1.5">PF (12%){!payslip.statutory.pfApplicable && <span className="text-slate-400"> · not applicable</span>}</td>
+                  <td className="text-right font-mono">{payslip.statutory.pfApplicable ? `− ${fmtINR(payslip.statutory.pf)}` : '—'}</td>
+                </tr>
                 <tr className="border-b border-slate-200"><td className="py-1.5">ESIC (0.75%)</td><td className="text-right font-mono">− {fmtINR(payslip.statutory.esic)}</td></tr>
                 <tr className="border-b border-slate-200"><td className="py-1.5">Professional tax</td><td className="text-right font-mono">− {fmtINR(payslip.statutory.pt)}</td></tr>
-                <tr className="font-bold"><td className="py-1.5">Total deductions</td><td className="text-right font-mono">− {fmtINR(payslip.absenceDeduction + payslip.statutory.pf + payslip.statutory.esic + payslip.statutory.pt)}</td></tr>
+                <tr className="border-b border-slate-200">
+                  <td className="py-1.5">TDS{!payslip.statutory.tdsApplicable && <span className="text-slate-400"> · not applicable</span>}</td>
+                  <td className="text-right font-mono">{payslip.statutory.tdsApplicable ? `− ${fmtINR(payslip.statutory.tds)}` : '—'}</td>
+                </tr>
+                <tr className="font-bold"><td className="py-1.5">Total deductions</td><td className="text-right font-mono">− {fmtINR(payslip.absenceDeduction + payslip.statutory.total)}</td></tr>
               </tbody>
             </table>
           </div>
@@ -152,7 +232,7 @@ function PayrollPage({ user, navArg }) {
 
   const totals = payslips.reduce((s, p) => ({
     base: s.base + p.base,
-    ded: s.ded + p.absenceDeduction + p.statutory.pf + p.statutory.esic + p.statutory.pt,
+    ded: s.ded + p.absenceDeduction + p.statutory.total,
     inc: s.inc + p.incentive,
     travel: s.travel + p.travelAllowance,
     net: s.net + p.netPay,
@@ -169,11 +249,13 @@ function PayrollPage({ user, navArg }) {
   const pageSlips = filtered.slice(page * PER, page * PER + PER);
 
   const exportAll = () => {
-    downloadCSV(`payroll_${month}.csv`, [
-      ['Code','Name','Site','Zone','Working','Present','Absent','Base','Absence Ded','PF','ESIC','PT','Sales','Incentive','Travel','Net Pay'],
+    downloadCSV(`payroll_${month}_${run ? run.status : 'preview'}.csv`, [
+      ['Code','Name','Site','Zone','Working','Present','Absent','Base','Absence Ded','PF','ESIC','PT','TDS','Sales','Incentive','Travel','Net Pay','Payroll Status'],
       ...payslips.map((p) => {
         const e = store.getEmployee(p.employeeId); const st = store.getSite(e.siteId);
-        return [e.code, e.name, st?.name || '', st?.zone || '', p.workingDays, p.presentDays, p.absentDays, p.base, p.absenceDeduction, p.statutory.pf, p.statutory.esic, p.statutory.pt, p.sales, p.incentive, p.travelAllowance, p.netPay];
+        return [e.code, e.name, st?.name || '', st?.zone || '', p.workingDays, p.presentDays, p.absentDays, p.base, p.absenceDeduction,
+          p.statutory.pfApplicable ? p.statutory.pf : 'N/A', p.statutory.esic, p.statutory.pt, p.statutory.tdsApplicable ? p.statutory.tds : 'N/A',
+          p.sales, p.incentive, p.travelAllowance, p.netPay, p.payrollStatus];
       }),
     ]);
   };
@@ -190,10 +272,12 @@ function PayrollPage({ user, navArg }) {
         subtitle={`${emps.length} employees · pro-rated over ${store.state.config.workingDays} working days · incentive is the higher of store target and slab`}>
         <Select value={month} onChange={(e) => setMonth(e.target.value)} className="!w-auto">
           <option value="2026-06">June 2026</option>
-          <option value="2026-07">July 2026 (in progress)</option>
+          <option value="2026-07">July 2026</option>
         </Select>
         <Btn onClick={exportAll}><Icon name="download" className="w-3.5 h-3.5"/>Export payout report</Btn>
       </PageHeader>
+
+      <PayrollStateBar month={month} run={run} user={user}/>
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         <StatCard label="Gross base" value={fmtINR(totals.base)} icon="wallet" tone="slate"/>
@@ -205,10 +289,10 @@ function PayrollPage({ user, navArg }) {
 
       {/* ---- Main payroll container ---- */}
       <div ref={blockRefs.run} className="scroll-mt-4"/>
-      <Card title={`Payslip preview · ${fmtMonth(month)}`} subtitle={run ? `Processed ${fmtDateTime(run.processedAt)} · ${run.count} payslips` : `${filtered.length} employees · not yet processed`} bodyClass="p-0" noBody
+      <Card title={`Payslip preview · ${fmtMonth(month)}`} subtitle={run ? `${PAYROLL_STATE_LABEL[run.status]} · ${run.count} payslips` : `${filtered.length} employees · not yet started`} bodyClass="p-0" noBody
         right={<div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5 h-7 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"><Icon name="search" className="w-3.5 h-3.5 text-slate-400"/><input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search…" className="bg-transparent text-[12px] outline-none w-24 sm:w-32 dark:text-slate-100"/></div>
-          {run ? <Badge tone="green"><Icon name="check-circle" className="w-3 h-3"/>Processed</Badge> : <Badge tone="amber">Preview</Badge>}
+          <StatusBadge status={run ? run.status : 'draft'} label={run ? PAYROLL_STATE_LABEL[run.status] : 'Not started'}/>
         </div>}>
         <div className="overflow-x-auto">
           <table className="w-full dense-table">
@@ -226,7 +310,7 @@ function PayrollPage({ user, navArg }) {
                     <td className="text-right font-mono text-[11px]"><span className="text-emerald-600">{p.presentDays}</span>/<span className="text-slate-400">{p.workingDays}</span> {p.absentDays > 0 && <span className="text-rose-600 ml-1">-{p.absentDays}</span>}</td>
                     <td className="text-right font-mono">{fmtINR(p.base)}</td>
                     <td className="text-right font-mono text-rose-700 dark:text-rose-400">{p.absenceDeduction > 0 ? '−'+fmtINR(p.absenceDeduction) : '—'}</td>
-                    <td className="text-right font-mono text-slate-500">−{fmtINR(p.statutory.pf + p.statutory.esic + p.statutory.pt)}</td>
+                    <td className="text-right font-mono text-slate-500">−{fmtINR(p.statutory.total)}</td>
                     <td className="text-right font-mono text-[11px] text-slate-500">{fmtINR(p.sales)}</td>
                     <td className="text-right font-mono text-emerald-700 dark:text-emerald-400">{p.incentive > 0 ? '+'+fmtINR(p.incentive) : '—'}</td>
                     <td className="text-right font-mono text-[11px] text-emerald-700 dark:text-emerald-400">{p.travelAllowance > 0 ? '+'+fmtINR(p.travelAllowance) : '—'}</td>
@@ -239,7 +323,7 @@ function PayrollPage({ user, navArg }) {
                 <td colSpan={3}>Totals · all {payslips.length}</td>
                 <td className="text-right font-mono">{fmtINR(totals.base)}</td>
                 <td className="text-right font-mono text-rose-700">−{fmtINR(payslips.reduce((s,p) => s+p.absenceDeduction,0))}</td>
-                <td className="text-right font-mono">−{fmtINR(payslips.reduce((s,p) => s+p.statutory.pf+p.statutory.esic+p.statutory.pt,0))}</td>
+                <td className="text-right font-mono">−{fmtINR(payslips.reduce((s,p) => s+p.statutory.total,0))}</td>
                 <td></td>
                 <td className="text-right font-mono text-emerald-700">+{fmtINR(totals.inc)}</td>
                 <td className="text-right font-mono text-emerald-700">+{fmtINR(totals.travel)}</td>
@@ -288,6 +372,7 @@ function PayrollPage({ user, navArg }) {
             <Empty icon="pin" title="No one is eligible" hint="Enable travel allowance from an employee's Settings tab."/>
           ) : (
             <>
+              <div className="overflow-x-auto">
               <table className="w-full dense-table text-[12.5px]">
                 <thead><tr><th>Employee</th><th>Store</th><th className="text-right">Allowance</th><th/></tr></thead>
                 <tbody>
@@ -310,6 +395,7 @@ function PayrollPage({ user, navArg }) {
                   })}
                 </tbody>
               </table>
+              </div>
               <div className="px-3 py-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[11px]">
                 <span className="text-slate-500">Top {topTravel.length} of {eligible.length} eligible employees</span>
                 <Btn size="xs" onClick={() => downloadCSV(`travel_allowance_${month}.csv`, [
@@ -357,6 +443,7 @@ function PayrollPage({ user, navArg }) {
             <Empty icon="trending-up" title="No incentive earned this month" hint="Set a store target or an incentive slab to start payouts."/>
           ) : (
             <>
+              <div className="overflow-x-auto">
               <table className="w-full dense-table text-[12.5px]">
                 <thead><tr><th>Employee</th><th className="text-right">Sales</th><th>Basis</th><th className="text-right">Incentive</th><th/></tr></thead>
                 <tbody>
@@ -382,6 +469,7 @@ function PayrollPage({ user, navArg }) {
                   })}
                 </tbody>
               </table>
+              </div>
               <div className="px-3 py-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[11px] gap-2 flex-wrap">
                 <span className="text-slate-500">Top {topIncentive.length} earners · full detail on the Incentives page</span>
                 <Btn size="xs" onClick={() => downloadCSV(`incentives_payroll_${month}.csv`, [

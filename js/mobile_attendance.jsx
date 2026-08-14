@@ -349,7 +349,7 @@ function RegularisePanel({ emp }) {
       shift: { start: shift.start, end: shift.end, name: shift.name, location: shift.location },
       entries: type === 'adjust' ? [{ in: entry.in, out: entry.out, location: shift.location }] : [],
       reason: reason.trim(), details,
-    });
+    }, emp);
     if (res && res.error) { toast(res.error, 'error'); return; }
     toast('Request submitted for HR approval', 'success');
     setReason(''); setDetails('');
@@ -367,7 +367,7 @@ function RegularisePanel({ emp }) {
   return (
     <div className="space-y-3">
       <form onSubmit={submit} className="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-3 space-y-3">
-        <Field label="Date"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)}/></Field>
+        <Field label="Date"><Input type="date" value={date} max={Store.TODAY.toISOString().slice(0, 10)} onChange={(e) => setDate(e.target.value)}/></Field>
 
         {/* What the shift was, so the times below mean something */}
         <div className="flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-900/50">

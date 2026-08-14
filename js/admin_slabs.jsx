@@ -166,6 +166,7 @@ function IncentiveConfigPanel({ user }) {
   /* ---- Upload tab state ---- */
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [preview, setPreview] = useState(null); // { byEmp, errors, total, success, fileName } — nothing is written until confirmed
   const fileInputRef = useRef(null);
 
   // Routed through the central matrix, not an inline role list — this used to
@@ -223,8 +224,12 @@ function IncentiveConfigPanel({ user }) {
     ['SDC003', 'Amit Sharma', 'Delhi', '0', 'Fixed Amount', '1500'],
   ]);
 
-  /* ---- Parse & process uploaded CSV ---- */
-  const processCSV = (text, fileName) => {
+  /* ---- Parse uploaded CSV into a preview — nothing is written here ----
+     The old behaviour applied every valid row the instant the file was
+     parsed, with no chance to review what was about to be replaced. Parsing
+     and committing are now two separate steps; this one only ever builds
+     state to show the admin, never touches an employee record. */
+  const parseCSV = (text, fileName) => {
     const lines = text.trim().split(/\r?\n/);
     if (lines.length < 2) { toast('File is empty or has no data rows', 'error'); return; }
     const header = lines[0].split(',').map((h) => h.trim().toLowerCase());
@@ -243,8 +248,7 @@ function IncentiveConfigPanel({ user }) {
 
     let total = 0, success = 0;
     const errors = [];
-    // Group incentives by empId
-    const byEmp = {};
+    const byEmp = {}; // grouped by empId — each employee's rows replace their existing rules, on confirm
 
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split(',').map((c) => c.trim());
@@ -271,28 +275,12 @@ function IncentiveConfigPanel({ user }) {
         if (isNaN(minSales) || minSales < 0) { errors.push({ row: i + 1, empId: empCode, empName: emp.name, reason: 'Invalid Minimum Sales — must be 0 or a positive number' }); continue; }
       }
 
-      if (!byEmp[emp.id]) byEmp[emp.id] = { emp, incentives: [] };
+      if (!byEmp[emp.id]) byEmp[emp.id] = { emp, before: emp.incentives || [], incentives: [] };
       byEmp[emp.id].incentives.push({ id: 'inc_' + Math.random().toString(36).slice(2, 8), minSales, type, value: numVal });
       success++;
     }
 
-    // Apply — guarded per-employee at the store layer, same as a manual edit.
-    Object.values(byEmp).forEach(({ emp, incentives }) => {
-      Store.updateEmployeeIncentives(emp.id, incentives, user);
-    });
-
-    Store.addIncentiveUpload({
-      fileName,
-      uploadedBy: user.name,
-      totalRecords: total,
-      successRecords: success,
-      failedRecords: errors.length,
-      status: errors.length === 0 ? 'Success' : errors.length === total ? 'Failed' : 'Partial',
-      errors,
-    });
-
-    toast(`Upload complete — ${success} applied, ${errors.length} failed`, errors.length ? 'warn' : 'success');
-    setTab('history');
+    setPreview({ byEmp, errors, total, success, fileName });
   };
 
   const handleFile = (file) => {
@@ -300,9 +288,34 @@ function IncentiveConfigPanel({ user }) {
     if (!file.name.endsWith('.csv')) { toast('Only CSV files are supported', 'error'); return; }
     setUploading(true);
     const reader = new FileReader();
-    reader.onload = (e) => { processCSV(e.target.result, file.name); setUploading(false); };
+    reader.onload = (e) => { parseCSV(e.target.result, file.name); setUploading(false); };
     reader.onerror = () => { toast('Failed to read file', 'error'); setUploading(false); };
     reader.readAsText(file);
+  };
+
+  /* ---- Confirm the preview — this is the only place anything is written ---- */
+  const confirmImport = () => {
+    if (!preview) return;
+    const lock = store.getPayrollLockInfo();
+    if (lock.locked) { toast(`Locked: ${lock.month} payroll was ${lock.status} — incentive changes are frozen until it is reopened.`, 'error'); return; }
+    const rows = Object.values(preview.byEmp);
+    let success = 0, failed = 0;
+    rows.forEach(({ emp, incentives }) => {
+      const res = Store.updateEmployeeIncentives(emp.id, incentives, user);
+      if (res && res.error) failed++; else success++;
+    });
+    Store.addIncentiveUpload({
+      fileName: preview.fileName,
+      uploadedBy: user.name,
+      totalRecords: preview.total,
+      successRecords: success,
+      failedRecords: preview.errors.length + failed,
+      status: (preview.errors.length + failed) === 0 ? 'Success' : success === 0 ? 'Failed' : 'Partial',
+      errors: preview.errors,
+    });
+    toast(`Import applied — ${success} employee${success === 1 ? '' : 's'} updated, ${preview.errors.length} row${preview.errors.length === 1 ? '' : 's'} rejected`, preview.errors.length ? 'warn' : 'success');
+    setPreview(null);
+    setTab('history');
   };
 
   const TABS = [
@@ -344,6 +357,7 @@ function IncentiveConfigPanel({ user }) {
               ...allRows.filter((r) => r.incentive).map((r) => [r.emp.code, r.emp.name, r.site?.city || '—', +r.incentive.minSales || 0, fmtIncentiveType(r.incentive.type), r.incentive.value]),
             ])}><Icon name="download" className="w-3 h-3"/>Export</Btn>
           </div>
+          <div className="overflow-x-auto">
           <table className="w-full dense-table text-[13px]">
             <thead>
               <tr>
@@ -401,6 +415,7 @@ function IncentiveConfigPanel({ user }) {
               {shown.length === 0 && <tr><td colSpan={7}><Empty title="No employees match filters"/></td></tr>}
             </tbody>
           </table>
+          </div>
           {pages > 1 && (
             <div className="flex items-center justify-between px-3 py-2 border-t border-slate-100 dark:border-slate-800 text-[12px]">
               <span className="text-slate-500">Showing {page * PER + 1}–{Math.min((page + 1) * PER, filtered.length)} of {filtered.length} rows</span>
@@ -415,7 +430,53 @@ function IncentiveConfigPanel({ user }) {
       )}
 
       {/* ======================== TAB 2: Bulk Upload ======================== */}
-      {tab === 'upload' && canUpload && (
+      {tab === 'upload' && canUpload && preview && (
+        <Card noBody title={`Review import — ${preview.fileName}`}
+          subtitle={`${preview.success} valid row${preview.success === 1 ? '' : 's'} across ${Object.keys(preview.byEmp).length} employee${Object.keys(preview.byEmp).length === 1 ? '' : 's'} · ${preview.errors.length} rejected · nothing is saved until you confirm`}
+          right={<div className="flex gap-2"><Btn size="sm" onClick={() => setPreview(null)}>Cancel</Btn><Btn size="sm" variant="primary" onClick={confirmImport}><Icon name="check" className="w-3.5 h-3.5"/>Confirm import</Btn></div>}>
+          <div className="p-3 space-y-3">
+            {store.getPayrollLockInfo().locked && (
+              <div className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 text-[12px] text-rose-700 dark:text-rose-300 flex items-center gap-2">
+                <Icon name="lock" className="w-4 h-4 shrink-0"/>Locked: {store.getPayrollLockInfo().month} payroll is {store.getPayrollLockInfo().status} — confirming will be refused until it is reopened.
+              </div>
+            )}
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1.5">Will be applied ({Object.keys(preview.byEmp).length} employees)</div>
+              <div className="rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden">
+                <table className="w-full dense-table text-[12px]">
+                  <thead><tr><th>Employee</th><th>Before</th><th>After</th></tr></thead>
+                  <tbody>
+                    {Object.values(preview.byEmp).map(({ emp, before, incentives }) => (
+                      <tr key={emp.id}>
+                        <td><EmployeeIdentity emp={emp}/></td>
+                        <td className="text-slate-500">{before.length} rule{before.length === 1 ? '' : 's'}</td>
+                        <td className="font-semibold text-emerald-700 dark:text-emerald-400">{incentives.length} rule{incentives.length === 1 ? '' : 's'}</td>
+                      </tr>
+                    ))}
+                    {Object.keys(preview.byEmp).length === 0 && <tr><td colSpan={3}><Empty title="No valid rows to apply"/></td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            {preview.errors.length > 0 && (
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wide text-rose-500 mb-1.5">Rejected ({preview.errors.length} rows)</div>
+                <div className="rounded-lg border border-rose-200 dark:border-rose-900 overflow-hidden max-h-48 overflow-y-auto">
+                  <table className="w-full dense-table text-[12px]">
+                    <thead><tr><th>Row</th><th>Employee ID</th><th>Reason</th></tr></thead>
+                    <tbody>
+                      {preview.errors.map((e, i) => (
+                        <tr key={i}><td className="font-mono">{e.row}</td><td className="font-mono text-slate-500">{e.empId || '—'}</td><td className="text-rose-600 dark:text-rose-400">{e.reason}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+      {tab === 'upload' && canUpload && !preview && (
         <div className="space-y-4">
           <div className="grid grid-cols-12 gap-4">
             {/* Upload card */}
@@ -499,7 +560,8 @@ function IncentiveConfigPanel({ user }) {
                     ['users', 'Employee matching', 'Employees are matched by Employee ID (e.g. SDC001). Unrecognised IDs are skipped with an error.'],
                     ['trending-up', 'Multiple incentives', 'A single employee can appear in multiple rows — each row adds one incentive rule.'],
                     ['target', 'Independent thresholds', 'Every rule that clears its Minimum Sales pays out, and the amounts add up. Rules do not override one another.'],
-                    ['refresh', 'Full replace', 'Uploading for an employee replaces all their existing incentive definitions.'],
+                    ['eye', 'Preview first', 'Nothing is saved until you review the parsed rows and confirm — cancel any time before that.'],
+                    ['refresh', 'Full replace', 'Confirming replaces all of that employee\'s existing incentive definitions, for employees present in the file only.'],
                     ['shield', 'Admin only', 'Incentive rules, slabs, targets and bulk uploads are Admin-only. HR sees a read-only calculation breakdown.'],
                   ].map(([icon, title, desc]) => (
                     <div key={title} className="flex gap-2.5">
@@ -522,6 +584,7 @@ function IncentiveConfigPanel({ user }) {
       {/* ======================== TAB 3: Upload History ======================== */}
       {tab === 'history' && (
         <Card noBody title="Upload History" subtitle="All previous incentive bulk upload records">
+          <div className="overflow-x-auto">
           <table className="w-full dense-table text-[13px]">
             <thead>
               <tr>
@@ -567,6 +630,7 @@ function IncentiveConfigPanel({ user }) {
               {uploads.length === 0 && <tr><td colSpan={8}><Empty title="No uploads yet" subtitle="Use the Bulk Upload tab to import employee incentive data"/></td></tr>}
             </tbody>
           </table>
+          </div>
         </Card>
       )}
 

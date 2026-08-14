@@ -450,7 +450,7 @@ function RegularizationRequestModal({ emp, day, user, onClose, onSubmitted }) {
       shift: { start: shift.start, end: shift.end, name: shift.name, location: shift.location },
       entries: type === 'adjust' ? entries.filter((e) => e.in || e.out) : [],
       reason: reason.trim(), details: note.trim(),
-    });
+    }, user);
     if (res && res.error) { toast(res.error, 'error'); return; }
     toast(`Regularisation requested for ${fmtDate(day.date)} — pending HR approval`, 'success');
     onSubmitted && onSubmitted(res);
@@ -689,7 +689,8 @@ function AttendanceRegularization({ user }) {
 
   const decide = (r, decision) => {
     if (!canDecide) { toast('Only HR and Admin can decide a regularisation', 'error'); return; }
-    Store.decideRegularisation(r.id, decision, user.id);
+    const res = Store.decideRegularisation(r.id, decision, user);
+    if (res && res.error) { toast(res.error, 'error'); return; }
     toast(decision === 'approved'
       ? `Approved — the attendance log and the affected payslip are updated`
       : 'Rejected — the attendance log is unchanged', decision === 'approved' ? 'success' : 'warn');
@@ -952,23 +953,47 @@ function RaiseRegularizationPicker({ user, onClose, onPick }) {
   const [date, setDate] = useState(Store.TODAY.toISOString().slice(0, 10));
   const emp = empId ? store.getEmployee(empId) : null;
   const day = emp ? store.getDayLog(emp.id, date) : null;
+  const periodLocked = Store.isPeriodLocked(date.slice(0, 7));
+  const run = periodLocked ? store.getPayrollRun(date.slice(0, 7)) : null;
+  // UI-level guard for a fast "no" before the click — the store layer is the
+  // real enforcement (isPeriodLocked, day.regularisable for an 'adjust'
+  // request, future-date). A future date is blocked outright here since no
+  // request type can ever be raised against a day that hasn't happened; the
+  // finer "adjust needs a correctable log, other doesn't" distinction is left
+  // to the next step, once the actual request type is chosen.
+  const blocked = !emp || !day || periodLocked || day.isFuture;
 
   return (
     <Modal open onClose={onClose} size="sm" icon="plus"
       title="Raise a regularisation" subtitle="On behalf of an employee"
       footer={<>
         <Btn onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" disabled={!emp} onClick={() => onPick(emp, day)}>Continue</Btn>
+        <Btn variant="primary" disabled={blocked} onClick={() => onPick(emp, day)}>Continue</Btn>
       </>}>
       <div className="space-y-3">
         <Field label="Employee"><EmployeePicker value={empId} onChange={setEmpId}/></Field>
-        <Field label="Date"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)}/></Field>
+        <Field label="Date"><Input type="date" value={date} max={Store.TODAY.toISOString().slice(0, 10)} onChange={(e) => setDate(e.target.value)}/></Field>
         {day && (
           <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 text-[12px] flex items-center gap-2">
             <StatusBadge status={day.status}/>
             <span className="font-mono text-slate-600 dark:text-slate-300">
               {day.inTime ? fmtHHMM(day.inTime) : 'MISSING'} → {day.outTime ? fmtHHMM(day.outTime) : 'MISSING'}
             </span>
+          </div>
+        )}
+        {periodLocked && (
+          <div className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 text-[11.5px] text-rose-700 dark:text-rose-300">
+            Locked: {fmtMonth(date.slice(0, 7))} payroll was {run.status} — this date can no longer be regularised.
+          </div>
+        )}
+        {!periodLocked && day && day.isFuture && (
+          <div className="p-2.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-[11.5px] text-amber-700 dark:text-amber-300">
+            Upcoming — not yet reachable.
+          </div>
+        )}
+        {!periodLocked && day && !day.isFuture && !day.regularisable && (
+          <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-[11px] text-slate-500">
+            {day.weekend ? 'Weekly off — a time correction needs a log to correct, but "Others" is still available.' : 'No clock log for this date — a time correction needs one, but "Others" is still available.'}
           </div>
         )}
       </div>

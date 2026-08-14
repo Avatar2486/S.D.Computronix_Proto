@@ -339,6 +339,22 @@ function WizardSteps({ steps, step, onJump, furthest }) {
    footer button, the review panel and the documents step all read the same
    `selfApprove` flag so they can never disagree.
    ========================================================================== */
+/* OTP + government-document sequencing shared by the desktop wizard (and
+   mirrored, not duplicated, in the mobile self-onboarding flow's own state).
+   Fixed demo code, generous but finite retry budget, and a real expiry window
+   so "failure/retry/expiry" are all reachable states rather than only
+   "success" and a fake "force failure" toggle. */
+const ONB_OTP_CODE = '123456';
+const ONB_OTP_RESEND_MS = 30000;
+const ONB_OTP_EXPIRY_MS = 120000;
+const ONB_OTP_MAX_ATTEMPTS = 5;
+const GOV_DOC_KEYS = ['aadhaar', 'pan', 'bank']; // these three carry a number + OTP; photo/address are file-only
+
+function blankKycDoc(key) {
+  return { number: '', ifsc: key === 'bank' ? '' : undefined, otp: '', otpSent: false, otpSentAt: null,
+    canResend: false, attempts: 0, verified: false, verifiedAt: null, file: null };
+}
+
 function OnboardingWizard({ open, onClose, onSubmitted, user }) {
   const toast = useToast();
   const actor = user || { role: 'hr-manager', name: 'HR', id: 'usr_hr' };
@@ -350,26 +366,34 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
     address: { ...Store.BLANK_ADDRESS },
     education: [],
     employeeType: 'field', designation: 'Technician', siteId: '', joiningDate: '',
-    baseSalary: 15000, travelEligible: false, travelAmount: 1500, geoFenceEnabled: true,
-    aadhaar: '', aadhaarOtp: '', aadhaarVerified: false,
-    pan: '', panVerified: false,
-    bankAcct: '', ifsc: '', bankVerified: false,
-    docs: {},
+    employmentBasis: 'contract',
+    pf: { applicable: false, uan: '' }, tds: { applicable: false },
+    baseSalary: 15000, salaryCycle: 'monthly', travelEligible: false, travelAmount: 1500, geoFenceEnabled: true,
+    skippedSteps: [],
+    kyc: {
+      aadhaar: blankKycDoc('aadhaar'), pan: blankKycDoc('pan'), bank: blankKycDoc('bank'),
+      photo: { file: null }, address: { file: null, skipped: false },
+    },
+    docStep: 0,
   };
   const [data, setData] = useState(BLANK);
   const [step, setStep] = useState(0);
   const [furthest, setFurthest] = useState(0);
   const [emailOk, setEmailOk] = useState(false);
-  const [forceFail, setForceFail] = useState(false);
-  const [loading, setLoading] = useState(null);
   const [sampleDoc, setSampleDoc] = useState(null);
   const set = (patch) => setData((d) => ({ ...d, ...patch }));
+  const setKyc = (key, patch) => setData((d) => ({
+    ...d, kyc: { ...d.kyc, [key]: { ...d.kyc[key], ...(typeof patch === 'function' ? patch(d.kyc[key]) : patch) } },
+  }));
 
   const isOffice = data.employeeType === 'office';
   const ladder = Store.DESIGNATION_LADDERS[data.employeeType] || Store.DESIGNATION_LADDERS.field;
 
   /* Switching employee type re-bases the fields that only make sense for one of
-     them: office staff lose the store and the geo-fence, field staff regain it. */
+     them: office staff lose the store and the geo-fence, field staff regain it.
+     Employment basis defaults with it (contract for field, full-time for
+     office) but stays a genuinely independent, always-editable choice — not
+     every field hire is on contract and not every office hire is full-time. */
   const setType = (type) => {
     const office = type === 'office';
     set({
@@ -377,6 +401,8 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
       geoFenceEnabled: !office,
       siteId: office ? '' : data.siteId,
       designation: (Store.DESIGNATION_LADDERS[type] || [])[office ? 0 : 1] || '',
+      employmentBasis: office ? 'full-time' : 'contract',
+      pf: { ...data.pf, applicable: office },
     });
   };
 
@@ -385,52 +411,77 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
     { id: 'address',    label: 'Address' },
     { id: 'education',  label: 'Education' },
     { id: 'employment', label: 'Employment' },
-    { id: 'kyc',        label: 'KYC' },
     { id: 'documents',  label: 'Documents' },
     { id: 'review',     label: 'Review' },
   ];
   const current = STEPS[step];
 
-  const verify = (kind) => {
-    setLoading(kind);
-    setTimeout(() => {
-      setLoading(null);
-      if (forceFail) { toast(`${kind.toUpperCase()} verification failed — please retry`, 'error'); return; }
-      if (kind === 'aadhaar') set({ aadhaarVerified: true });
-      if (kind === 'pan') set({ panVerified: true });
-      if (kind === 'bank') set({ bankVerified: true });
-      toast(`${kind.toUpperCase()} verified successfully`, 'success');
-    }, 1200);
+  /* ---- OTP + sequential document verification ----
+     A document's number is editable up to the moment an OTP is sent for it —
+     sending locks the number so the OTP actually vouches for what is on
+     record, not for whatever was typed last. "Change number" is the only way
+     back in, and it always costs a fresh OTP cycle. */
+  const sendOtp = (key) => {
+    setKyc(key, { otpSent: true, otpSentAt: Date.now(), otp: '', attempts: 0, canResend: false, verified: false, verifiedAt: null });
+    setTimeout(() => setKyc(key, { canResend: true }), ONB_OTP_RESEND_MS);
+    toast(`OTP sent (demo code: ${ONB_OTP_CODE})`, 'info');
   };
+  const verifyOtp = (key) => {
+    const rec = data.kyc[key];
+    if (!rec.otpSent) return;
+    if (Date.now() - rec.otpSentAt > ONB_OTP_EXPIRY_MS) { toast('OTP expired — resend to try again', 'error'); return; }
+    if (rec.otp !== ONB_OTP_CODE) {
+      const attempts = rec.attempts + 1;
+      setKyc(key, { attempts });
+      toast(attempts >= ONB_OTP_MAX_ATTEMPTS ? 'Too many incorrect attempts — resend a new OTP' : `Incorrect OTP — ${ONB_OTP_MAX_ATTEMPTS - attempts} attempt${ONB_OTP_MAX_ATTEMPTS - attempts === 1 ? '' : 's'} left`, 'error');
+      return;
+    }
+    setKyc(key, { verified: true, verifiedAt: new Date().toISOString() });
+    toast(`${key === 'aadhaar' ? 'Aadhaar' : key === 'pan' ? 'PAN' : 'Bank account'} verified`, 'success');
+  };
+  const changeNumber = (key) => setKyc(key, (prev) => ({ ...blankKycDoc(key), file: prev.file }));
+  const handleKycFile = (key, file) => {
+    const err = validateDocFile(file);
+    if (err) { toast(err, 'error'); return; }
+    setKyc(key, { file: { fileName: file.name, size: file.size, type: file.type } });
+  };
+  const kycDocDone = (key) => (GOV_DOC_KEYS.includes(key)
+    ? data.kyc[key].verified && !!data.kyc[key].file
+    : key === 'photo' ? !!data.kyc.photo.file : true); // address is optional — never blocks
+  const requiredDocsDone = ['aadhaar', 'pan', 'bank', 'photo'].every(kycDocDone);
 
-  const requiredDocsDone = Store.REQUIRED_DOC_KEYS.every((k) => data.docs[k]);
   const stepValid = (i) => {
     const id = STEPS[i].id;
     if (id === 'personal')   return !!(data.name.trim() && data.phone.trim() && emailOk);
     if (id === 'address')    return !!(data.address.line1.trim() && data.address.city.trim() && /^\d{6}$/.test(String(data.address.pincode || '')));
     if (id === 'education')  return true; // optional by design — many field hires have none on file
-    if (id === 'employment') return !!(data.designation && (isOffice || data.siteId));
-    if (id === 'kyc')        return data.aadhaarVerified && data.panVerified && data.bankVerified;
+    if (id === 'employment') return !!(data.designation && (isOffice || data.siteId) && +data.baseSalary > 0 && data.salaryCycle);
     if (id === 'documents')  return requiredDocsDone;
     return true;
   };
   const canNext = stepValid(step);
   const go = (i) => { setStep(i); setFurthest((f) => Math.max(f, i)); };
 
-  const handleDocFile = (docKey, file) => {
-    const err = validateDocFile(file);
-    if (err) { toast(err, 'error'); return; }
-    set({ docs: { ...data.docs, [docKey]: { fileName: file.name, size: file.size, type: file.type } } });
+  const skipEducation = () => {
+    set({ skippedSteps: [...new Set([...data.skippedSteps, 'education'])] });
+    toast('Education skipped — add it later from the employee profile', 'info');
+    go(step + 1);
   };
 
   const reset = () => { setData(BLANK); setStep(0); setFurthest(0); setEmailOk(false); };
 
   const submit = () => {
-    // Documents follow the same approval rule as the record itself.
+    // Documents follow the same approval rule as the record itself. Each
+    // carries the OTP-verification audit timestamp alongside the upload, not
+    // just a boolean — "verified" now means something traceable.
     const docStatus = selfApprove ? 'verified' : 'uploaded';
     const documents = {};
-    Object.entries(data.docs).forEach(([k, v]) => {
-      documents[k] = { status: docStatus, fileName: v.fileName, size: v.size, uploadedAt: new Date().toISOString() };
+    Object.entries(data.kyc).forEach(([k, v]) => {
+      if (!v.file) return;
+      documents[k] = {
+        status: docStatus, fileName: v.file.fileName, size: v.file.size, uploadedAt: new Date().toISOString(),
+        otpVerifiedAt: v.verifiedAt || null,
+      };
     });
 
     const emp = Store.addEmployee({
@@ -442,19 +493,24 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
       currentAddress: formatAddress(data.address),
       education: data.education,
       employeeType: data.employeeType,
+      employmentBasis: data.employmentBasis,
+      pf: { ...data.pf, uan: data.pf.applicable ? data.pf.uan.trim() : '' },
+      tds: { ...data.tds },
       role: isOffice ? 'hr-manager' : 'field-employee',
       designation: data.designation,
       designationHistory: [{ from: null, to: data.designation, at: new Date().toISOString(), by: actor.id, note: 'Initial designation' }],
       siteId: data.siteId || null,
       joiningDate: data.joiningDate || '',
       baseSalary: +data.baseSalary || 0,
+      salaryCycle: data.salaryCycle,
       travelEligible: !!data.travelEligible,
       travelAmount: data.travelEligible ? +data.travelAmount || 0 : 0,
       geoFenceEnabled: !!data.geoFenceEnabled,
-      aadhaarMasked: 'XXXX-XXXX-' + data.aadhaar.slice(-4).padStart(4, '0'),
-      panMasked: data.pan.slice(0, 2) + 'XXX' + data.pan.slice(-4),
-      bankVerified: data.bankVerified, ifsc: data.ifsc,
+      aadhaarMasked: 'XXXX-XXXX-' + data.kyc.aadhaar.number.slice(-4).padStart(4, '0'),
+      panMasked: data.kyc.pan.number.slice(0, 2) + 'XXX' + data.kyc.pan.number.slice(-4),
+      bankVerified: data.kyc.bank.verified, ifsc: data.kyc.bank.ifsc,
       documents,
+      onboardingSkipped: data.skippedSteps,
       status: 'pending',
       approvalStatus: selfApprove ? 'approved' : 'pending-approval',
       submittedBy: actor.id,
@@ -487,10 +543,11 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
         : `Created by ${actor.name} · an Admin must approve before the employee goes active.`}
       footer={
         <>
-          <label className="flex items-center gap-1.5 text-[11px] text-slate-500 mr-auto cursor-pointer">
-            <input type="checkbox" checked={forceFail} onChange={(e) => setForceFail(e.target.checked)} className="accent-brand-700"/>
-            Force verification failure (demo)
-          </label>
+          {data.skippedSteps.length > 0 && (
+            <span className="mr-auto text-[11px] text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1">
+              <Icon name="alert" className="w-3.5 h-3.5"/>{data.skippedSteps.length} section{data.skippedSteps.length === 1 ? '' : 's'} skipped
+            </span>
+          )}
           {step > 0 && <Btn onClick={() => setStep(step - 1)}>Back</Btn>}
           {step < STEPS.length - 1 && (
             <Btn variant="primary" onClick={() => go(step + 1)} disabled={!canNext}>
@@ -562,13 +619,25 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
       {/* ---------------- Education ---------------- */}
       {current.id === 'education' && (
         <div className="space-y-3">
-          <div className="p-2.5 rounded-lg bg-brand-50 dark:bg-brand-900/20 border border-brand-100 dark:border-brand-800 flex items-start gap-2.5">
-            <Icon name="graduation" className="w-4 h-4 text-brand-700 shrink-0 mt-px"/>
-            <div className="text-[12px] text-brand-900 dark:text-brand-100">
-              Add each qualification and attach its certificate or marksheet. Optional — you can complete this later from the employee's profile.
+          <div className="p-2.5 rounded-lg bg-brand-50 dark:bg-brand-900/20 border border-brand-100 dark:border-brand-800 flex items-start justify-between gap-2.5">
+            <div className="flex items-start gap-2.5">
+              <Icon name="graduation" className="w-4 h-4 text-brand-700 shrink-0 mt-px"/>
+              <div className="text-[12px] text-brand-900 dark:text-brand-100">
+                Add each qualification and attach its certificate or marksheet. Optional — not required for activation.
+              </div>
             </div>
+            {data.education.length === 0 && !data.skippedSteps.includes('education') && (
+              <button type="button" onClick={skipEducation} className="shrink-0 text-[11px] font-semibold text-brand-700 dark:text-brand-300 underline underline-offset-2 whitespace-nowrap">
+                Skip for now
+              </button>
+            )}
           </div>
-          <EducationEditor education={data.education} onChange={(v) => set({ education: v })}/>
+          {data.skippedSteps.includes('education') && data.education.length === 0 && (
+            <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
+              <Icon name="alert" className="w-3.5 h-3.5 text-amber-500"/>Skipped — will show as a pending item on the onboarding checklist and the employee's profile.
+            </div>
+          )}
+          <EducationEditor education={data.education} onChange={(v) => set({ education: v, skippedSteps: v.length ? data.skippedSteps.filter((s) => s !== 'education') : data.skippedSteps })}/>
         </div>
       )}
 
@@ -599,6 +668,27 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
             </div>
           </div>
 
+          {/* Employment basis — a separate axis from Employee type: field/office
+             is about WHERE someone works, contract/full-time is about HOW they
+             are employed. Technicians default to contract (spec §3.6) but the
+             choice is always open — not every field hire is on contract. */}
+          <div>
+            <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1.5 uppercase tracking-wide">Employment basis</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {Store.EMPLOYMENT_BASIS.map((b) => (
+                <button key={b.id} type="button"
+                  onClick={() => set({ employmentBasis: b.id, pf: { ...data.pf, applicable: b.id === 'full-time' } })}
+                  className={`text-left p-3 rounded-xl border-2 transition ${
+                    data.employmentBasis === b.id
+                      ? 'border-brand-500 bg-brand-50/60 dark:bg-brand-900/20'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}`}>
+                  <span className="text-[12.5px] font-bold text-slate-800 dark:text-slate-100">{b.label}</span>
+                  <div className="text-[11px] text-slate-500 mt-1">{b.hint}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
             <Field label="Designation" hint={`${data.employeeType === 'office' ? 'Office' : 'Field'} career ladder`}>
               <SearchSelect value={data.designation} onChange={(v) => set({ designation: v })} allowCustom
@@ -613,8 +703,14 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
                 searchPlaceholder="Search store, code or city…" emptyLabel="No store matches"/>
             </Field>
             <Field label="Joining date"><Input type="date" value={data.joiningDate} onChange={(e) => set({ joiningDate: e.target.value })}/></Field>
-            <Field label="Base salary (₹ / month)">
+            <Field label="Base salary (₹ / month)" hint={data.baseSalary ? numberToWordsIndian(+data.baseSalary) : undefined}>
               <Input type="number" min="0" step="500" value={data.baseSalary} onChange={(e) => set({ baseSalary: e.target.value })}/>
+            </Field>
+            <Field label="Salary cycle">
+              <Select value={data.salaryCycle} onChange={(e) => set({ salaryCycle: e.target.value })}>
+                <option value="monthly">Monthly</option>
+                <option value="bi-weekly">Bi-weekly</option>
+              </Select>
             </Field>
             <Field label="Travel allowance">
               <div className="flex items-center gap-2">
@@ -626,6 +722,70 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
                   value={data.travelAmount} onChange={(e) => set({ travelAmount: e.target.value })} className="!w-24"/>
               </div>
             </Field>
+          </div>
+
+          {/* Reporting line — read-only, derived from the store's own manager
+             assignments (never invented). Shows once a store is picked; a
+             newly-opened store with no assignments yet shows the placeholder
+             it already has everywhere else in the app. */}
+          {!isOffice && data.siteId && (() => {
+            const site = Store.getSite(data.siteId);
+            const mgr = site && site.managerId ? Store.getEmployee(site.managerId) : null;
+            const tl = site ? Store.getTeamLead(site.teamLeadId) : null;
+            const bm = site ? Store.getBusinessManager(site.bmId) : null;
+            return (
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-start gap-2.5">
+                <Icon name="users" className="w-4 h-4 text-slate-400 shrink-0 mt-px"/>
+                <div className="text-[11px] text-slate-600 dark:text-slate-300">
+                  Reporting line for this store: <span className="font-semibold text-slate-800 dark:text-slate-100">
+                    Technician → {mgr ? mgr.name : 'Store Manager (unassigned)'} → {tl ? tl.name : 'Team Lead (unassigned)'} → {bm ? bm.name : 'Business Manager (unassigned)'}
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Statutory configuration — PF only ever applies when explicitly
+             turned on; contract staff never have it implied. TDS applicability
+             is a business decision this prototype does not have real rates
+             for, so it is captured as a choice with an explanation, not
+             computed. */}
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 space-y-3">
+            <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wide">Statutory configuration</div>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={data.pf.applicable} onChange={(e) => set({ pf: { ...data.pf, applicable: e.target.checked } })}
+                className="accent-brand-700 w-4 h-4 mt-0.5 shrink-0"/>
+              <div className="min-w-0 flex-1">
+                <div className="text-[12.5px] font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 flex-wrap">
+                  Provident Fund (PF) applicable
+                  {data.employmentBasis === 'contract' && !data.pf.applicable && <Badge tone="slate">Not implied for contract staff</Badge>}
+                </div>
+                <div className="text-[11px] text-slate-600 dark:text-slate-300 mt-1">
+                  {data.employmentBasis === 'full-time'
+                    ? 'Default for Full-time employment — clear the box if this person is exempt.'
+                    : 'Off by default for Contract employment. PF is never assumed unless turned on here.'}
+                </div>
+                {data.pf.applicable && (
+                  <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                    <Field label="UAN (if already allotted)"><Input value={data.pf.uan} onChange={(e) => set({ pf: { ...data.pf, uan: e.target.value } })} placeholder="12-digit UAN, optional at this stage"/></Field>
+                  </div>
+                )}
+              </div>
+            </label>
+            <div className="border-t border-slate-100 dark:border-slate-800 pt-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="text-[12.5px] font-bold text-slate-800 dark:text-slate-100">Tax Deducted at Source (TDS)</div>
+                <Select value={data.tds.applicable ? 'yes' : 'no'} onChange={(e) => set({ tds: { applicable: e.target.value === 'yes' } })} className="!w-auto">
+                  <option value="no">Not applicable</option>
+                  <option value="yes">Applicable</option>
+                </Select>
+              </div>
+              <div className="text-[11px] text-slate-500 mt-1">
+                Prototype placeholder — this records the choice and shows it on the payslip; it does not compute a real
+                deduction. Actual TDS applicability depends on total annual compensation and declarations this demo
+                does not model.
+              </div>
+            </div>
           </div>
 
           {/* Geo-fencing — on by default for field staff, off for office staff */}
@@ -654,123 +814,175 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
         </div>
       )}
 
-      {/* ---------------- KYC ---------------- */}
-      {current.id === 'kyc' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-          {/* Aadhaar */}
-          <Card title="Aadhaar eKYC" bodyClass="p-3"
-            right={data.aadhaarVerified ? <Badge tone="green">Verified</Badge> : <Badge tone="amber">Pending</Badge>}>
-            <div className="space-y-2.5">
-              <div className="text-[11px] text-slate-500">UIDAI eKYC (simulated). The number is masked before storage.</div>
-              <Field label="Aadhaar number">
-                <Input value={data.aadhaar} disabled={data.aadhaarVerified}
-                  onChange={(e) => set({ aadhaar: e.target.value.replace(/\D/g, '').slice(0, 12) })} placeholder="12-digit UID"/>
-              </Field>
-              <Field label="OTP">
-                <Input value={data.aadhaarOtp} disabled={data.aadhaarVerified}
-                  onChange={(e) => set({ aadhaarOtp: e.target.value.replace(/\D/g, '').slice(0, 6) })} placeholder="demo: 123456"/>
-              </Field>
-              {data.aadhaarVerified
-                ? <div className="text-[12px] font-semibold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5"><Icon name="check-circle" className="w-4 h-4"/>XXXX-XXXX-{data.aadhaar.slice(-4)}</div>
-                : <Btn variant="primary" className="w-full" disabled={data.aadhaar.length !== 12 || !!loading} onClick={() => verify('aadhaar')}>
-                    {loading === 'aadhaar' ? 'Verifying with UIDAI…' : 'Verify Aadhaar'}
-                  </Btn>}
-            </div>
-          </Card>
+      {/* ---------------- Documents (sequential: one government document at a
+          time — number, OTP, then the file for it, before moving on) ---------------- */}
+      {current.id === 'documents' && (() => {
+        const docKey = MOBILE_DOC_LIST[data.docStep].k;
+        const isGov = GOV_DOC_KEYS.includes(docKey);
+        const rec = data.kyc[docKey];
+        const docMeta = MOBILE_DOC_LIST[data.docStep];
+        const otpExpired = rec.otpSent && Date.now() - rec.otpSentAt > ONB_OTP_EXPIRY_MS;
+        const numberValid = docKey === 'aadhaar' ? rec.number.length === 12
+          : docKey === 'pan' ? rec.number.length === 10
+          : docKey === 'bank' ? rec.number.length >= 8 && rec.ifsc.length >= 11
+          : true;
+        const done = kycDocDone(docKey);
 
-          {/* PAN */}
-          <Card title="PAN" bodyClass="p-3"
-            right={data.panVerified ? <Badge tone="green">Verified</Badge> : <Badge tone="amber">Pending</Badge>}>
-            <div className="space-y-2.5">
-              <div className="text-[11px] text-slate-500">Name-match against NSDL records (simulated).</div>
-              <Field label="PAN number">
-                <Input value={data.pan} disabled={data.panVerified}
-                  onChange={(e) => set({ pan: e.target.value.toUpperCase().slice(0, 10) })} placeholder="ABCDE1234F"/>
-              </Field>
-              {data.panVerified
-                ? <div className="text-[12px] font-semibold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5"><Icon name="check-circle" className="w-4 h-4"/>{data.pan.slice(0,2)}XXX{data.pan.slice(-4)}</div>
-                : <Btn variant="primary" className="w-full" disabled={data.pan.length !== 10 || !!loading} onClick={() => verify('pan')}>
-                    {loading === 'pan' ? 'Verifying with NSDL…' : 'Verify PAN'}
-                  </Btn>}
+        return (
+          <div className="space-y-3">
+            <div className={`p-2.5 rounded-lg border flex items-start gap-2.5 ${selfApprove
+              ? 'bg-emerald-50 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800'
+              : 'bg-amber-50 border-amber-200 dark:bg-amber-900/20 dark:border-amber-800'}`}>
+              <Icon name={selfApprove ? 'check-circle' : 'clock'} className={`w-4 h-4 shrink-0 mt-px ${selfApprove ? 'text-emerald-600' : 'text-amber-600'}`}/>
+              <div className={`text-[12px] ${selfApprove ? 'text-emerald-900 dark:text-emerald-100' : 'text-amber-900 dark:text-amber-100'}`}>
+                {selfApprove
+                  ? 'As an Admin your uploads are verified on save — no document review step.'
+                  : 'Documents you upload are marked Pending Approval and reviewed by an Admin.'}
+                {' '}One document at a time · JPG, PNG or PDF · max {DOC_MAX_MB} MB each.
+              </div>
             </div>
-          </Card>
 
-          {/* Bank */}
-          <Card title="Bank account" bodyClass="p-3"
-            right={data.bankVerified ? <Badge tone="green">Verified</Badge> : <Badge tone="amber">Pending</Badge>}>
-            <div className="space-y-2.5">
-              <div className="text-[11px] text-slate-500">Penny-drop via NPCI — a ₹1 credit confirms ownership.</div>
-              <Field label="Account number">
-                <Input value={data.bankAcct} disabled={data.bankVerified}
-                  onChange={(e) => set({ bankAcct: e.target.value.replace(/\D/g, '') })} placeholder="0123456789"/>
-              </Field>
-              <Field label="IFSC code">
-                <Input value={data.ifsc} disabled={data.bankVerified}
-                  onChange={(e) => set({ ifsc: e.target.value.toUpperCase() })} placeholder="HDFC0001234"/>
-              </Field>
-              {data.bankVerified
-                ? <div className="text-[12px] font-semibold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5"><Icon name="check-circle" className="w-4 h-4"/>Penny-drop confirmed</div>
-                : <Btn variant="primary" className="w-full" disabled={data.bankAcct.length < 8 || data.ifsc.length < 11 || !!loading} onClick={() => verify('bank')}>
-                    {loading === 'bank' ? 'Sending ₹1 penny-drop…' : 'Verify account'}
-                  </Btn>}
+            {/* Mini sequence rail — jump back to fix an earlier document, but
+               forward progress within the step still requires the current one done. */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+              {MOBILE_DOC_LIST.map((d, i) => {
+                const dDone = kycDocDone(d.k);
+                const reachable = i === 0 || kycDocDone(MOBILE_DOC_LIST[i - 1].k) || i <= data.docStep;
+                return (
+                  <button key={d.k} type="button" disabled={!reachable} onClick={() => reachable && set({ docStep: i })}
+                    className={`shrink-0 flex items-center gap-1.5 text-[11px] font-semibold rounded-md px-2 py-1 border transition ${
+                      i === data.docStep ? 'border-brand-500 bg-brand-50 dark:bg-brand-900/20 text-brand-800 dark:text-brand-200'
+                      : dDone ? 'border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+                      : reachable ? 'border-slate-200 dark:border-slate-700 text-slate-500' : 'border-slate-100 dark:border-slate-800 text-slate-300 cursor-default'}`}>
+                    <Icon name={dDone ? 'check-circle' : 'file'} className="w-3.5 h-3.5"/>{d.label}
+                    {!d.required && <span className="text-slate-400">(optional)</span>}
+                  </button>
+                );
+              })}
             </div>
-          </Card>
-        </div>
-      )}
 
-      {/* ---------------- Documents ---------------- */}
-      {current.id === 'documents' && (
-        <div className="space-y-3">
-          <div className={`p-2.5 rounded-lg border flex items-start gap-2.5 ${selfApprove
-            ? 'bg-emerald-50 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800'
-            : 'bg-amber-50 border-amber-200 dark:bg-amber-900/20 dark:border-amber-800'}`}>
-            <Icon name={selfApprove ? 'check-circle' : 'clock'} className={`w-4 h-4 shrink-0 mt-px ${selfApprove ? 'text-emerald-600' : 'text-amber-600'}`}/>
-            <div className={`text-[12px] ${selfApprove ? 'text-emerald-900 dark:text-emerald-100' : 'text-amber-900 dark:text-amber-100'}`}>
-              {selfApprove
-                ? 'As an Admin your uploads are verified on save — no document review step.'
-                : 'Documents you upload are marked Pending Approval and reviewed by an Admin.'}
-              {' '}JPG, PNG or PDF · max {DOC_MAX_MB} MB each.
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-            {MOBILE_DOC_LIST.map((d) => {
-              const rec = data.docs[d.k];
-              return (
-                <div key={d.k} className={`p-3 border-2 border-dashed rounded-xl transition ${rec ? 'border-emerald-400 bg-emerald-50/60 dark:bg-emerald-900/20' : 'border-slate-300 dark:border-slate-700'}`}>
-                  <div className="flex items-start justify-between gap-1 mb-1.5">
-                    <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-                      <Icon name={rec ? 'check-circle' : 'file'} className={`w-4 h-4 shrink-0 ${rec ? 'text-emerald-600' : 'text-slate-400'}`}/>
-                      <span className="font-semibold text-[12px] text-slate-800 dark:text-slate-100">{d.label}</span>
-                      {d.required && !rec && <Badge tone="red">Required</Badge>}
-                      {!d.required && !rec && <Badge tone="slate">Optional</Badge>}
-                    </div>
-                    <button onClick={() => setSampleDoc(d.k)}
-                      className="shrink-0 text-[10px] font-semibold text-brand-700 dark:text-brand-300 hover:text-brand-900 underline underline-offset-2">
-                      Sample
-                    </button>
+            <Card title={docMeta.label} bodyClass="p-3"
+              right={done ? <Badge tone="green">{isGov ? 'Verified' : 'Uploaded'}</Badge> : rec.skipped ? <Badge tone="slate">Skipped</Badge> : <Badge tone="amber">Pending</Badge>}>
+              <div className="space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="text-[11px] text-slate-500 flex-1">{docMeta.hint}</div>
+                  <button onClick={() => setSampleDoc(docKey)} className="shrink-0 text-[10px] font-semibold text-brand-700 dark:text-brand-300 hover:text-brand-900 underline underline-offset-2">Sample</button>
+                </div>
+
+                {/* Number + OTP — only for Aadhaar / PAN / Bank */}
+                {isGov && (
+                  <div className="space-y-2.5 p-3 rounded-lg bg-slate-50/60 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700">
+                    {docKey === 'bank' ? (
+                      <div className="grid grid-cols-2 gap-2">
+                        <Field label="Account number">
+                          <Input value={rec.number} disabled={rec.otpSent}
+                            onChange={(e) => setKyc('bank', { number: e.target.value.replace(/\D/g, '') })} placeholder="0123456789"/>
+                        </Field>
+                        <Field label="IFSC code">
+                          <Input value={rec.ifsc} disabled={rec.otpSent}
+                            onChange={(e) => setKyc('bank', { ifsc: e.target.value.toUpperCase() })} placeholder="HDFC0001234"/>
+                        </Field>
+                      </div>
+                    ) : (
+                      <Field label={docKey === 'aadhaar' ? 'Aadhaar number' : 'PAN number'}>
+                        <Input value={rec.number} disabled={rec.otpSent}
+                          onChange={(e) => setKyc(docKey, { number: docKey === 'aadhaar' ? e.target.value.replace(/\D/g, '').slice(0, 12) : e.target.value.toUpperCase().slice(0, 10) })}
+                          placeholder={docKey === 'aadhaar' ? '12-digit UID' : 'ABCDE1234F'}/>
+                      </Field>
+                    )}
+
+                    {!rec.otpSent && (
+                      <Btn variant="primary" className="w-full" disabled={!numberValid} onClick={() => sendOtp(docKey)}>
+                        <Icon name="send" className="w-3.5 h-3.5"/>Send OTP
+                      </Btn>
+                    )}
+
+                    {rec.otpSent && !rec.verified && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Input value={rec.otp} onChange={(e) => setKyc(docKey, { otp: e.target.value.replace(/\D/g, '').slice(0, 6) })} placeholder="6-digit OTP (demo: 123456)" className="flex-1"/>
+                          <Btn variant="primary" disabled={rec.otp.length !== 6 || otpExpired || rec.attempts >= ONB_OTP_MAX_ATTEMPTS} onClick={() => verifyOtp(docKey)}>Verify</Btn>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className={otpExpired ? 'text-rose-600 dark:text-rose-400 font-semibold' : 'text-slate-500'}>
+                            {otpExpired ? 'OTP expired' : rec.attempts > 0 ? `${ONB_OTP_MAX_ATTEMPTS - rec.attempts} attempt${ONB_OTP_MAX_ATTEMPTS - rec.attempts === 1 ? '' : 's'} left` : 'Sent to the phone/email on file'}
+                          </span>
+                          <button type="button" disabled={!rec.canResend && !otpExpired} onClick={() => sendOtp(docKey)}
+                            className={`font-semibold ${rec.canResend || otpExpired ? 'text-brand-700 dark:text-brand-300 hover:underline' : 'text-slate-300 dark:text-slate-600 cursor-default'}`}>
+                            Resend OTP
+                          </button>
+                        </div>
+                        <button type="button" onClick={() => changeNumber(docKey)} className="text-[11px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 underline underline-offset-2">
+                          Change number
+                        </button>
+                      </div>
+                    )}
+
+                    {rec.verified && (
+                      <div className="flex items-center justify-between">
+                        <div className="text-[12px] font-semibold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5">
+                          <Icon name="check-circle" className="w-4 h-4"/>
+                          {docKey === 'aadhaar' ? `XXXX-XXXX-${rec.number.slice(-4)}` : docKey === 'pan' ? `${rec.number.slice(0,2)}XXX${rec.number.slice(-4)}` : 'Penny-drop confirmed'}
+                          <span className="text-[10px] text-slate-400 font-normal">verified {fmtDateTime(rec.verifiedAt)}</span>
+                        </div>
+                        <button type="button" onClick={() => changeNumber(docKey)} className="text-[11px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 underline underline-offset-2 shrink-0">Change</button>
+                      </div>
+                    )}
                   </div>
-                  <div className="text-[10px] text-slate-500 mb-2 leading-snug">{d.hint}</div>
+                )}
+
+                {/* File upload — required for every doc except once OTP-verified this
+                   also gates it for gov docs; photo/address are file-only. */}
+                {(!isGov || rec.verified) && (
                   <label className="block cursor-pointer">
                     <input type="file" accept=".pdf,image/*" className="hidden"
-                      onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) handleDocFile(d.k, f); }}/>
-                    {rec ? (
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-[11px] text-slate-600 dark:text-slate-300 truncate max-w-[130px]" title={rec.fileName}>{rec.fileName}</span>
+                      onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) handleKycFile(docKey, f); }}/>
+                    {rec.file ? (
+                      <div className="flex items-center gap-1.5 flex-wrap px-3 py-1.5 rounded-md border border-emerald-300 dark:border-emerald-700 bg-emerald-50/60 dark:bg-emerald-900/20">
+                        <Icon name="check-circle" className="w-3.5 h-3.5 text-emerald-600"/>
+                        <span className="text-[11px] text-slate-600 dark:text-slate-300 truncate max-w-[220px]" title={rec.file.fileName}>{rec.file.fileName}</span>
                         <StatusBadge status={selfApprove ? 'verified' : 'uploaded'}/>
                       </div>
                     ) : (
                       <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 hover:border-brand-400 hover:bg-brand-50/50 dark:hover:bg-brand-900/10 transition">
                         <Icon name="upload" className="w-3.5 h-3.5 text-slate-400"/>
-                        <span className="text-[11px] text-slate-500">Click to upload</span>
+                        <span className="text-[11px] text-slate-500">Click to upload {docMeta.label.toLowerCase()}</span>
                       </div>
                     )}
                   </label>
-                </div>
-              );
-            })}
+                )}
+
+                {/* Skip — address proof only; explains the consequence and
+                   is tracked, never offered for a legally-required document. */}
+                {docKey === 'address' && !rec.file && !rec.skipped && (
+                  <button type="button" onClick={() => setKyc('address', { skipped: true })}
+                    className="text-[11px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 underline underline-offset-2">
+                    Skip for now — can be added later from the employee profile
+                  </button>
+                )}
+                {docKey === 'address' && rec.skipped && !rec.file && (
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
+                    <Icon name="alert" className="w-3.5 h-3.5 text-amber-500"/>Skipped — shows as a pending item on the onboarding checklist.
+                    <button type="button" onClick={() => setKyc('address', { skipped: false })} className="text-brand-700 dark:text-brand-300 underline underline-offset-2">Undo</button>
+                  </div>
+                )}
+              </div>
+            </Card>
+
+            <div className="flex items-center justify-between">
+              <Btn size="sm" disabled={data.docStep === 0} onClick={() => set({ docStep: data.docStep - 1 })}>
+                <Icon name="chevron-left" className="w-3.5 h-3.5"/>Previous document
+              </Btn>
+              {data.docStep < MOBILE_DOC_LIST.length - 1 && (
+                <Btn size="sm" variant="primary" disabled={!done && MOBILE_DOC_LIST[data.docStep].required}
+                  onClick={() => set({ docStep: data.docStep + 1 })}>
+                  Next document<Icon name="chevron-right" className="w-3.5 h-3.5"/>
+                </Btn>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ---------------- Review ---------------- */}
       {current.id === 'review' && (
@@ -818,17 +1030,20 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
               ]],
               ['Employment', [
                 ['Designation', data.designation],
+                ['Employment basis', Store.EMPLOYMENT_BASIS.find((b) => b.id === data.employmentBasis)?.label || data.employmentBasis],
                 ['Store', data.siteId ? (Store.getSite(data.siteId) || {}).name : (isOffice ? 'Head office' : '—')],
                 ['Joining date', data.joiningDate ? fmtDate(data.joiningDate, { year: true }) : 'On approval'],
-                ['Base salary', fmtINR(+data.baseSalary || 0)],
+                ['Salary', `${fmtINRWords(+data.baseSalary || 0)} · ${data.salaryCycle}`],
                 ['Travel allowance', data.travelEligible ? fmtINR(+data.travelAmount || 0) + ' / month' : 'Not eligible'],
+                ['PF', data.pf.applicable ? `Applicable${data.pf.uan ? ' · UAN ' + data.pf.uan : ''}` : 'Not applicable'],
+                ['TDS', data.tds.applicable ? 'Applicable' : 'Not applicable'],
               ]],
               ['Address', [['Residential', formatAddress(data.address) || '—']]],
               ['Verification', [
-                ['Aadhaar', data.aadhaarVerified ? `Verified · XXXX-XXXX-${data.aadhaar.slice(-4)}` : 'Not verified'],
-                ['PAN', data.panVerified ? `Verified · ${data.pan.slice(0,2)}XXX${data.pan.slice(-4)}` : 'Not verified'],
-                ['Bank', data.bankVerified ? 'Verified via penny-drop' : 'Not verified'],
-                ['Documents', `${Object.keys(data.docs).length} of ${MOBILE_DOC_LIST.length} uploaded`],
+                ['Aadhaar', data.kyc.aadhaar.verified ? `Verified · XXXX-XXXX-${data.kyc.aadhaar.number.slice(-4)}` : 'Not verified'],
+                ['PAN', data.kyc.pan.verified ? `Verified · ${data.kyc.pan.number.slice(0,2)}XXX${data.kyc.pan.number.slice(-4)}` : 'Not verified'],
+                ['Bank', data.kyc.bank.verified ? 'Verified via penny-drop' : 'Not verified'],
+                ['Documents', `${MOBILE_DOC_LIST.filter((d) => data.kyc[d.k].file).length} of ${MOBILE_DOC_LIST.length} uploaded`],
                 ['Education', `${data.education.length} qualification${data.education.length === 1 ? '' : 's'} · ${data.education.reduce((n, e) => n + (e.documents || []).length, 0)} certificate(s)`],
               ]],
             ].map(([section, rows]) => (
@@ -845,6 +1060,45 @@ function OnboardingWizard({ open, onClose, onSubmitted, user }) {
               </div>
             ))}
           </div>
+
+          {/* Onboarding checklist — everything pending and why activation is or
+             isn't blocked, in one place, instead of scattered across steps. */}
+          {(() => {
+            const missing = ['aadhaar', 'pan', 'bank', 'photo'].filter((k) => !kycDocDone(k));
+            const skippedList = [...data.skippedSteps, ...(data.kyc.address.skipped && !data.kyc.address.file ? ['address proof'] : [])];
+            const blockReasons = [];
+            if (missing.length) blockReasons.push(`${missing.length} required document${missing.length === 1 ? '' : 's'} not verified/uploaded: ${missing.join(', ')}`);
+            if (!(+data.baseSalary > 0)) blockReasons.push('Salary is not configured');
+            return (
+              <Card title="Onboarding checklist" bodyClass="p-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-2">
+                  {[
+                    ['Required docs', `${4 - missing.length}/4`, missing.length === 0 ? 'text-emerald-600' : 'text-amber-600'],
+                    ['Skipped items', String(skippedList.length), skippedList.length ? 'text-amber-600' : 'text-slate-700 dark:text-slate-200'],
+                    ['Education', `${data.education.length} added`, 'text-slate-700 dark:text-slate-200'],
+                    ['Policies pending ack.', String(Store.getPoliciesForUser({ role: isOffice ? 'hr-manager' : 'field-employee', siteId: data.siteId || null, designation: data.designation }, { activeOnly: true }).filter((p) => p.acknowledgeRequired).length), 'text-slate-700 dark:text-slate-200'],
+                  ].map(([k, v, c]) => (
+                    <div key={k} className="p-2 rounded-lg bg-slate-50 dark:bg-slate-800/50">
+                      <div className="text-[9.5px] uppercase text-slate-500 font-bold">{k}</div>
+                      <div className={`text-[14px] font-bold ${c}`}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                {skippedList.length > 0 && (
+                  <div className="text-[11px] text-slate-500 mb-1.5">Skipped: {skippedList.join(', ')} — will show as pending on the employee's profile.</div>
+                )}
+                {blockReasons.length > 0 ? (
+                  <div className="p-2 rounded-lg bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 text-[11.5px] text-rose-700 dark:text-rose-300">
+                    <span className="font-semibold">Blocking activation:</span> {blockReasons.join('; ')}.
+                  </div>
+                ) : (
+                  <div className="p-2 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 text-[11.5px] text-emerald-700 dark:text-emerald-300">
+                    Nothing legally required is missing — mandatory items only. Skipped optional items above remain outstanding on the profile.
+                  </div>
+                )}
+              </Card>
+            );
+          })()}
         </div>
       )}
 
@@ -872,8 +1126,100 @@ const COMPANY = {
   signatory: { name: 'Neha Kapoor', title: 'Head of People Operations' },
 };
 
-function OfferLetterModal({ emp, open, onClose }) {
-  if (!open || !emp) return null;
+/* Offer-letter lifecycle chrome — status strip, history, and the actions
+   available at each stage. Draft → pending-ack (generated, waiting on the
+   employee) → admin-review (employee signed, waiting on Admin) → approved
+   (issued) → returned (Admin sent it back with a reason, loops to draft). */
+const OFFER_STATUS_LABEL = {
+  draft: 'Draft', 'pending-ack': 'Waiting on employee', 'admin-review': 'Waiting on Admin review',
+  approved: 'Approved & issued', returned: 'Returned for correction',
+};
+const OFFER_STATUS_TONE = { draft: 'slate', 'pending-ack': 'amber', 'admin-review': 'brand', approved: 'green', returned: 'red' };
+
+function OfferLetterModal({ emp: empProp, open, onClose, user }) {
+  const store = useStore();
+  const toast = useToast();
+  const [returning, setReturning] = useState(false);
+  const [returnReason, setReturnReason] = useState('');
+  if (!open || !empProp) return null;
+  const emp = store.getEmployee(empProp.id) || empProp;
+  const offerStatus = emp.offerStatus || 'draft';
+  const isAdminUser = isSuperAdmin(user);
+  const canGenerate = can(user, 'employee.edit');
+
+  const generate = () => {
+    const res = Store.generateOfferLetter(emp.id, user);
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    toast('Offer letter generated — waiting on the employee to acknowledge', 'success');
+  };
+  const markAcknowledged = () => {
+    const res = Store.acknowledgeOffer(emp.id, emp.name);
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    toast('Marked as acknowledged by the employee', 'success');
+  };
+  const approve = () => {
+    const res = Store.reviewOffer(emp.id, 'approved', user);
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    toast('Offer letter approved and issued', 'success');
+  };
+  const doReturn = () => {
+    if (!returnReason.trim()) { toast('A reason is required to return the offer', 'error'); return; }
+    const res = Store.reviewOffer(emp.id, 'returned', user, returnReason.trim());
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    toast('Offer letter returned to draft', 'warn');
+    setReturning(false); setReturnReason('');
+  };
+  const regenerate = () => {
+    const res = Store.regenerateOfferLetter(emp.id, user);
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    toast('Back to draft — make corrections and generate again', 'info');
+  };
+
+  /* Before Generated, there is nothing to read yet — showing the letter body
+     here would let a PDF exist before the lifecycle says it does. */
+  if (offerStatus === 'draft') {
+    const blockers = [];
+    if (!(+emp.baseSalary > 0)) blockers.push('salary is not configured');
+    if (!emp.salaryCycle) blockers.push('salary cycle is not set');
+    return (
+      <Modal open onClose={onClose} size="md" icon="file"
+        title="Digital Offer / Joining Letter" subtitle={`${emp.name} · ${emp.code}`}
+        footer={<Btn variant="primary" onClick={onClose}>Close</Btn>}>
+        <div className="space-y-3">
+          <div className="flex items-center gap-2"><Badge tone={OFFER_STATUS_TONE.draft}>{OFFER_STATUS_LABEL.draft}</Badge></div>
+          <div className="text-[12.5px] text-slate-600 dark:text-slate-300">
+            Salary, salary cycle, employment basis and statutory choices must be finalised before the offer letter can
+            be generated — this is validated here, not just implied by the form being filled in.
+          </div>
+          {blockers.length > 0 ? (
+            <div className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 text-[12px] text-rose-700 dark:text-rose-300">
+              Cannot generate yet — {blockers.join(', ')}. Set these from the Settings tab first.
+            </div>
+          ) : (
+            <div className="p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 text-[12px] text-emerald-700 dark:text-emerald-300">
+              Ready to generate — salary {fmtINRWords(emp.baseSalary)} · {emp.salaryCycle}.
+            </div>
+          )}
+          {canGenerate ? (
+            <Btn variant="primary" className="w-full" disabled={blockers.length > 0} onClick={generate}>
+              <Icon name="file" className="w-3.5 h-3.5"/>Generate offer letter
+            </Btn>
+          ) : (
+            <div className="text-[11px] text-slate-400 italic">Generating an offer letter requires Admin or HR.</div>
+          )}
+        </div>
+      </Modal>
+    );
+  }
+
+  return <OfferLetterDocument emp={emp} offerStatus={offerStatus} isAdminUser={isAdminUser} canGenerate={canGenerate}
+    onClose={onClose} onMarkAcknowledged={markAcknowledged} onApprove={approve}
+    returning={returning} setReturning={setReturning} returnReason={returnReason} setReturnReason={setReturnReason}
+    onReturn={doReturn} onRegenerate={regenerate}/>;
+}
+
+function OfferLetterDocument({ emp, offerStatus, isAdminUser, canGenerate, onClose,
+  onMarkAcknowledged, onApprove, returning, setReturning, returnReason, setReturnReason, onReturn, onRegenerate }) {
   const site = Store.getSite(emp.siteId);
   const issued = emp.approvedAt ? new Date(emp.approvedAt) : Store.TODAY;
   const joining = emp.joiningDate ? new Date(emp.joiningDate) : issued;
@@ -907,6 +1253,26 @@ function OfferLetterModal({ emp, open, onClose }) {
       title="Digital Offer / Joining Letter" subtitle={`${emp.name} · Ref ${ref}`}
       bodyClass="p-0 bg-slate-100 dark:bg-slate-950"
       footer={<>
+        {offerStatus === 'pending-ack' && (
+          <span className="mr-auto text-[11px] text-slate-500 no-print">Waiting on the employee's own acknowledgement/signature.</span>
+        )}
+        {offerStatus === 'pending-ack' && (
+          <Btn className="no-print" onClick={onMarkAcknowledged} title="Stand-in for the employee's own mobile acknowledgement">
+            <Icon name="check" className="w-3.5 h-3.5"/>Mark employee acknowledged (demo)
+          </Btn>
+        )}
+        {offerStatus === 'admin-review' && isAdminUser && !returning && (
+          <>
+            <Btn className="no-print" onClick={() => setReturning(true)}><Icon name="x" className="w-3.5 h-3.5"/>Return with reason</Btn>
+            <Btn variant="success" className="no-print" onClick={onApprove}><Icon name="check-circle" className="w-3.5 h-3.5"/>Read and approve</Btn>
+          </>
+        )}
+        {offerStatus === 'admin-review' && !isAdminUser && (
+          <span className="mr-auto text-[11px] text-slate-400 italic no-print">Only an Admin can read and approve — HR can review the draft but not issue it.</span>
+        )}
+        {offerStatus === 'returned' && canGenerate && (
+          <Btn variant="primary" className="no-print" onClick={onRegenerate}><Icon name="refresh" className="w-3.5 h-3.5"/>Revise &amp; regenerate</Btn>
+        )}
         <Btn className="no-print" onClick={() => window.print()}><Icon name="print" className="w-3.5 h-3.5"/>Print / Save as PDF</Btn>
         <Btn variant="primary" className="no-print" onClick={onClose}>Close</Btn>
       </>}>
@@ -921,6 +1287,43 @@ function OfferLetterModal({ emp, open, onClose }) {
           .offer-sheet .running-head { position: running(head); }
         }
       `}</style>
+
+      {/* Lifecycle status + history — never printed, and never lets a reader
+         confuse "a PDF is showing" with "this offer is issued". */}
+      <div className="no-print px-4 sm:px-6 pt-4">
+        <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <Badge tone={OFFER_STATUS_TONE[offerStatus]}>{OFFER_STATUS_LABEL[offerStatus]}</Badge>
+              {offerStatus === 'approved' && <span className="text-[11px] text-slate-500">Issued — this is the final version.</span>}
+            </div>
+          </div>
+          {offerStatus === 'returned' && (
+            <div className="mt-2 p-2 rounded-lg bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 text-[12px] text-rose-700 dark:text-rose-300">
+              {(emp.offerHistory || []).slice().reverse().find((h) => h.status === 'returned')?.note || 'Returned for correction.'}
+            </div>
+          )}
+          {returning && (
+            <div className="mt-2 space-y-2">
+              <Textarea value={returnReason} onChange={(e) => setReturnReason(e.target.value)} placeholder="Reason for returning this offer…"/>
+              <div className="flex justify-end gap-2">
+                <Btn size="xs" onClick={() => setReturning(false)}>Cancel</Btn>
+                <Btn size="xs" variant="danger" onClick={onReturn}>Confirm return</Btn>
+              </div>
+            </div>
+          )}
+          {(emp.offerHistory || []).length > 0 && (
+            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1">
+              {emp.offerHistory.slice().reverse().map((h, i) => (
+                <div key={i} className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-600 dark:text-slate-300">{OFFER_STATUS_LABEL[h.status] || h.status}{h.note ? ` · ${h.note}` : ''}{h.by ? ` · ${h.by}` : ''}</span>
+                  <span className="text-slate-400 font-mono shrink-0">{fmtDateTime(h.at)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
       <div className="p-4 sm:p-6 overflow-auto">
         <div className="print-area offer-sheet shadow-card rounded-lg overflow-hidden">
@@ -1068,7 +1471,16 @@ function OfferLetterModal({ emp, open, onClose }) {
    ========================================================================== */
 const POLICY_CATEGORIES = ['Policy', 'Handbook', 'Payroll', 'IT', 'Security', 'Compliance', 'Other'];
 
+/* The four roles this prototype knows about — a policy's audience picker
+   offers exactly these, matching PERMISSIONS/ROLE_LABEL everywhere else.
+   Site/designation/named-employee targeting exist in the data model
+   (`Store.matchesAudience`) but have no editor UI yet; role is the audience
+   dimension the brief's own example scopes by, so it's the one this pass
+   wires up. */
+const POLICY_AUDIENCE_ROLES = ['admin', 'hr-manager', 'site-manager', 'field-employee'];
+
 function PolicyEditorModal({ policy, onClose, user }) {
+  const store = useStore();
   const toast = useToast();
   const isNew = !policy.id;
   const [draft, setDraft] = useState(() => ({
@@ -1076,8 +1488,13 @@ function PolicyEditorModal({ policy, onClose, user }) {
     summary: policy.summary || '', version: policy.version || '1.0',
     fileName: policy.fileName || '', active: policy.active !== false,
     acknowledgeRequired: policy.acknowledgeRequired !== false,
+    audience: policy.audience || { roles: [], siteIds: [], zones: [], designations: [], employeeIds: [] },
   }));
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
+  const audienceRoles = draft.audience.roles || [];
+  const toggleRole = (role) => set({
+    audience: { ...draft.audience, roles: audienceRoles.includes(role) ? audienceRoles.filter((r) => r !== role) : [...audienceRoles, role] },
+  });
 
   /* Replacing the file is what makes this a new version, so bumping the minor
      version automatically keeps the two in step. */
@@ -1092,8 +1509,9 @@ function PolicyEditorModal({ policy, onClose, user }) {
 
   const save = () => {
     if (!draft.title.trim()) { toast('Document title is required', 'error'); return; }
-    Store.upsertPolicy({ ...draft, title: draft.title.trim(), body: draft.summary }, user.name);
-    toast(isNew ? 'Document added to the library' : 'Document updated', 'success');
+    const res = Store.upsertPolicy({ ...draft, title: draft.title.trim(), body: draft.summary }, user);
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    toast(isNew ? 'Document added to the library' : 'Document updated — re-acknowledgement required if the version changed', 'success');
     onClose();
   };
 
@@ -1145,9 +1563,53 @@ function PolicyEditorModal({ policy, onClose, user }) {
             Acknowledgement required during onboarding
           </label>
         </div>
+
+        {/* Audience — who this document is distributed to. Leaving every role
+            unchecked means "All employees", chosen on purpose rather than the
+            old behaviour where every active policy went to everyone with no
+            way to say otherwise. */}
+        <div className="pt-1">
+          <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wide mb-1.5">Audience</div>
+          <div className="flex flex-wrap gap-3">
+            {POLICY_AUDIENCE_ROLES.map((role) => (
+              <label key={role} className="flex items-center gap-1.5 text-[12px] font-medium text-slate-700 dark:text-slate-200 cursor-pointer">
+                <input type="checkbox" checked={audienceRoles.includes(role)} onChange={() => toggleRole(role)} className="accent-brand-700 w-4 h-4"/>
+                {ROLE_LABEL[role]}
+              </label>
+            ))}
+          </div>
+          <div className="mt-1.5 text-[11px] text-slate-500">
+            {audienceRoles.length === 0
+              ? 'No roles selected — this document goes to All employees.'
+              : `Visible only to: ${audienceRoles.map((r) => ROLE_LABEL[r]).join(', ')}.`}
+            {' '}
+            <span className="font-semibold">
+              {(() => {
+                // Live count off the in-progress selection, not just after save —
+                // an admin should see the audience size change as they check boxes.
+                const everyone = store.getEmployees({ status: 'active' }).concat(store.getUsers());
+                const count = audienceRoles.length === 0 ? everyone.length : everyone.filter((u) => audienceRoles.includes(roleOf(u))).length;
+                return `${count} people in scope.`;
+              })()}
+            </span>
+          </div>
+        </div>
       </div>
     </Modal>
   );
+}
+
+/* Plain-English label for a policy's audience — "All employees" is the only
+   phrase that means every viewer, so it only ever appears for a genuinely
+   empty audience, never as a default assumption. */
+function audienceLabel(audience) {
+  if (!audience) return 'All employees';
+  const roles = audience.roles || [];
+  const named = (audience.employeeIds || []).length;
+  const parts = [];
+  if (roles.length) parts.push(roles.map((r) => ROLE_LABEL[r] || r).join(', '));
+  if (named) parts.push(`${named} named employee${named === 1 ? '' : 's'}`);
+  return parts.length ? parts.join(' + ') : 'All employees';
 }
 
 function PolicyLibrary({ user, manage }) {
@@ -1159,15 +1621,24 @@ function PolicyLibrary({ user, manage }) {
   const [q, setQ] = useState('');
   const canEdit = manage && can(user, 'policy.edit');
 
-  const all = store.getPolicies();
-  const list = (canEdit ? all : all.filter((p) => p.active))
-    .filter((p) => !q || `${p.title} ${p.category} ${p.summary}`.toLowerCase().includes(q.toLowerCase()));
+  /* HR/Admin manage the whole library regardless of their own audience scope;
+     everyone else sees only the active policies actually assigned to them —
+     this is the fix for "every active policy is visible to everyone". */
+  const all = canEdit ? store.getPolicies() : store.getPoliciesForUser(user, { activeOnly: true });
+  const list = all.filter((p) => !q || `${p.title} ${p.category} ${p.summary}`.toLowerCase().includes(q.toLowerCase()));
 
   const remove = async (p) => {
     const ok = await confirm({ title: `Delete "${p.title}"?`, body: 'The document is removed from the library for everyone.', confirmLabel: 'Delete', destructive: true });
     if (!ok) return;
-    Store.deletePolicy(p.id);
+    const res = Store.deletePolicy(p.id, user);
+    if (res && res.error) { toast(res.error, 'error'); return; }
     toast('Document deleted', 'warn');
+  };
+
+  const acknowledge = (p) => {
+    const res = Store.acknowledgePolicy(p.id, user.id);
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    toast(`Acknowledged "${p.title}"`, 'success');
   };
 
   return (
@@ -1176,7 +1647,7 @@ function PolicyLibrary({ user, manage }) {
         title="Company policies & HR documents"
         subtitle={canEdit
           ? `${all.length} document${all.length === 1 ? '' : 's'} · ${all.filter((p) => p.active).length} active`
-          : 'Read or download the documents that apply to you'}
+          : `${all.length} document${all.length === 1 ? '' : 's'} assigned to you · read or download`}
         right={
           <div className="flex items-center gap-2">
             <div className="hidden sm:flex items-center gap-1.5 h-7 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
@@ -1195,7 +1666,10 @@ function PolicyLibrary({ user, manage }) {
           <Empty icon="book" title="No documents" hint={q ? 'Nothing matches that search.' : 'The library is empty.'}/>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-px bg-slate-100 dark:bg-slate-800">
-            {list.map((p) => (
+            {list.map((p) => {
+              const acked = store.isPolicyAcknowledged(p.id, user.id);
+              const coverage = canEdit ? store.getPolicyAckCoverage(p.id) : null;
+              return (
               <div key={p.id} className={`p-3 bg-white dark:bg-slate-900 flex flex-col gap-2 ${!p.active ? 'opacity-60' : ''}`}>
                 <div className="flex items-start gap-2.5">
                   <div className="w-9 h-9 rounded-lg bg-brand-50 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300 flex items-center justify-center shrink-0">
@@ -1207,25 +1681,38 @@ function PolicyLibrary({ user, manage }) {
                       <Badge tone="slate">{p.category}</Badge>
                       <Badge tone="brand">v{p.version}</Badge>
                       <StatusBadge status={p.active ? 'active' : 'inactive'}/>
-                      {p.acknowledgeRequired && <Badge tone="amber">Acknowledge</Badge>}
+                      {p.acknowledgeRequired && (acked ? <Badge tone="green">Acknowledged</Badge> : <Badge tone="amber">Acknowledge</Badge>)}
                     </div>
                   </div>
                 </div>
                 <div className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed line-clamp-3">{p.summary}</div>
+                <div className="text-[10px] text-slate-400 flex items-center gap-1">
+                  <Icon name="users" className="w-3 h-3 shrink-0"/>
+                  <span className="truncate" title={audienceLabel(p.audience)}>{audienceLabel(p.audience)}</span>
+                  {coverage && <span className="ml-auto shrink-0 font-mono">{coverage.ackedCount}/{coverage.audienceCount} acked</span>}
+                </div>
                 <div className="text-[10px] text-slate-400 mt-auto">Updated {fmtDate(p.updatedAt, { year: true })} by {p.updatedBy}</div>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <Btn size="xs" onClick={() => setReading(p)}><Icon name="eye" className="w-3 h-3"/>Read</Btn>
                   <Btn size="xs" onClick={() => toast(`Downloading ${p.fileName}`, 'info')}><Icon name="download" className="w-3 h-3"/>Download</Btn>
+                  {p.acknowledgeRequired && !acked && (
+                    <Btn size="xs" variant="primary" onClick={() => acknowledge(p)}><Icon name="check" className="w-3 h-3"/>Acknowledge</Btn>
+                  )}
                   {canEdit && <>
                     <Btn size="xs" onClick={() => setEditing(p)}><Icon name="edit" className="w-3 h-3"/>Edit</Btn>
-                    <Btn size="xs" onClick={() => { Store.togglePolicy(p.id); toast(p.active ? 'Marked inactive' : 'Marked active', 'success'); }}>
+                    <Btn size="xs" onClick={() => {
+                      const res = Store.togglePolicy(p.id, undefined, user);
+                      if (res && res.error) { toast(res.error, 'error'); return; }
+                      toast(p.active ? 'Marked inactive' : 'Marked active', 'success');
+                    }}>
                       {p.active ? 'Deactivate' : 'Activate'}
                     </Btn>
                     <Btn size="xs" variant="danger" onClick={() => remove(p)}><Icon name="trash" className="w-3 h-3"/></Btn>
                   </>}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Card>
@@ -1249,7 +1736,8 @@ function PolicyLibrary({ user, manage }) {
                 ['Category', reading.category],
                 ['Version', 'v' + reading.version],
                 ['Status', reading.active ? 'Active' : 'Inactive'],
-                ['Acknowledgement', reading.acknowledgeRequired ? 'Required during onboarding' : 'Not required'],
+                ['Audience', audienceLabel(reading.audience)],
+                ['Acknowledgement', reading.acknowledgeRequired ? 'Required' : 'Not required'],
                 ['Last updated', `${fmtDate(reading.updatedAt, { year: true })} by ${reading.updatedBy}`],
               ].map(([k, v]) => (
                 <div key={k} className="px-3 py-2 flex justify-between gap-4">
@@ -1258,6 +1746,22 @@ function PolicyLibrary({ user, manage }) {
                 </div>
               ))}
             </div>
+            {(reading.versions || []).length > 1 && (
+              <div>
+                <div className="text-[10px] uppercase font-bold tracking-wide text-slate-500 mb-1">Version history</div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-800">
+                  {reading.versions.slice().reverse().map((v, i) => (
+                    <div key={i} className="px-3 py-2 flex items-center justify-between gap-3 text-[11.5px]">
+                      <div>
+                        <span className="font-semibold text-slate-800 dark:text-slate-100">v{v.version}</span>
+                        <span className="text-slate-400"> · {v.changeNote}</span>
+                      </div>
+                      <span className="text-slate-400 shrink-0">{fmtDate(v.updatedAt, { year: true })} · {v.updatedBy}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="text-[11px] text-slate-400 italic text-center">
               Full document text is served from the attached file — this preview shows the published summary and metadata.
             </div>
@@ -1280,16 +1784,17 @@ function PoliciesPage({ user }) {
   const canEdit = can(user, 'policy.edit');
   const all = store.getPolicies();
   const active = all.filter((p) => p.active);
-  const mustAck = active.filter((p) => p.acknowledgeRequired);
+  const mine = store.getPoliciesForUser(user, { activeOnly: true });
+  const pending = store.getPendingAcknowledgements(user);
 
   return (
     <div className="space-y-4">
       <PageHeader eyebrow="Workspace" title="Company policies & HR documents"
         subtitle={canEdit
-          ? 'The company handbook, code of conduct and HR policies. Everything published here is visible to every employee.'
-          : 'The handbook, code of conduct and HR policies that apply to you. Read or download any document.'}>
-        <Badge tone="brand">{active.length} active</Badge>
-        {mustAck.length > 0 && <Badge tone="amber">{mustAck.length} need acknowledgement</Badge>}
+          ? 'The company handbook, code of conduct and HR policies, scoped to the audience each one is assigned to.'
+          : 'The handbook, code of conduct and HR policies assigned to you. Read or download any document.'}>
+        <Badge tone="brand">{canEdit ? `${active.length} active` : `${mine.length} assigned`}</Badge>
+        {pending.length > 0 && <Badge tone="amber">{pending.length} need{pending.length === 1 ? 's' : ''} your acknowledgement</Badge>}
       </PageHeader>
 
       {!canEdit && (

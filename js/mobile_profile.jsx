@@ -3,13 +3,21 @@
    The handbook and HR policies are written for the people who carry this app,
    so they have to be readable from it. Read-only by construction: there is no
    edit path here at all, and editing lives with HR and Admin on the desktop. */
-function MobilePoliciesSheet({ onClose }) {
+function MobilePoliciesSheet({ emp, onClose }) {
   const store = useStore();
   const toast = useToast();
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(null);
-  const list = store.getPolicies().filter((p) => p.active)
+  // Only the policies actually assigned to this employee — the sheet used to
+  // show every active policy to everyone, with no audience concept at all.
+  const list = store.getPoliciesForUser(emp, { activeOnly: true })
     .filter((p) => !q || `${p.title} ${p.category} ${p.summary}`.toLowerCase().includes(q.toLowerCase()));
+  const pending = store.getPendingAcknowledgements(emp);
+  const acknowledge = (p) => {
+    const res = Store.acknowledgePolicy(p.id, emp.id);
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    toast(`Acknowledged "${p.title}"`, 'success');
+  };
 
   return (
     <div className="absolute inset-0 z-[5] bg-white dark:bg-slate-900 flex flex-col anim-in">
@@ -20,7 +28,9 @@ function MobilePoliciesSheet({ onClose }) {
           </button>
           <div className="min-w-0">
             <div className="text-[14px] font-bold text-slate-900 dark:text-white">Company Policies</div>
-            <div className="text-[10px] text-slate-500">Maintained by HR · read and download</div>
+            <div className="text-[10px] text-slate-500">
+              {pending.length > 0 ? `${pending.length} need${pending.length === 1 ? 's' : ''} your acknowledgement` : 'Maintained by HR · read and download'}
+            </div>
           </div>
         </div>
         <div className="mt-3 flex items-center gap-1.5 h-9 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
@@ -36,7 +46,9 @@ function MobilePoliciesSheet({ onClose }) {
             {q ? 'Nothing matches that search.' : 'No policies published yet.'}
           </div>
         )}
-        {list.map((p) => (
+        {list.map((p) => {
+          const acked = store.isPolicyAcknowledged(p.id, emp.id);
+          return (
           <button key={p.id} onClick={() => setOpen(p)}
             className="w-full text-left rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 flex gap-2.5 hover:border-brand-400 transition">
             <div className="w-9 h-9 rounded-lg bg-brand-50 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300 flex items-center justify-center shrink-0">
@@ -47,13 +59,14 @@ function MobilePoliciesSheet({ onClose }) {
               <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                 <Badge tone="slate">{p.category}</Badge>
                 <Badge tone="brand">v{p.version}</Badge>
-                {p.acknowledgeRequired && <Badge tone="amber">Acknowledge</Badge>}
+                {p.acknowledgeRequired && (acked ? <Badge tone="green">Acknowledged</Badge> : <Badge tone="amber">Acknowledge</Badge>)}
               </div>
               <div className="text-[10.5px] text-slate-500 mt-1 line-clamp-2 leading-snug">{p.summary}</div>
             </div>
             <Icon name="chevron-right" className="w-4 h-4 text-slate-300 shrink-0 self-center"/>
           </button>
-        ))}
+          );
+        })}
       </div>
 
       {open && (
@@ -82,10 +95,24 @@ function MobilePoliciesSheet({ onClose }) {
                   </div>
                 ))}
               </div>
-              <button onClick={() => toast(`Downloading ${open.fileName}`, 'info')}
-                className="w-full h-10 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-[13px] font-semibold flex items-center justify-center gap-2">
-                <Icon name="download" className="w-4 h-4"/>Download PDF
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => toast(`Downloading ${open.fileName}`, 'info')}
+                  className="flex-1 h-10 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[13px] font-semibold flex items-center justify-center gap-2">
+                  <Icon name="download" className="w-4 h-4"/>Download
+                </button>
+                {open.acknowledgeRequired && (
+                  store.isPolicyAcknowledged(open.id, emp.id) ? (
+                    <div className="flex-1 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 text-[13px] font-semibold flex items-center justify-center gap-2">
+                      <Icon name="check-circle" className="w-4 h-4"/>Acknowledged
+                    </div>
+                  ) : (
+                    <button onClick={() => { acknowledge(open); }}
+                      className="flex-1 h-10 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-[13px] font-semibold flex items-center justify-center gap-2">
+                      <Icon name="check" className="w-4 h-4"/>Acknowledge
+                    </button>
+                  )
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -257,10 +284,15 @@ function MobileProfile({ emp: empProp, onLogout, onTour, onOpenDocs, onOpenPolic
         <div className="flex-1 min-w-0">
           <div className="text-[12px] font-bold text-slate-800 dark:text-white">Company Policies</div>
           <div className="text-[10px] text-slate-500">
-            {store.getPolicies().filter((p) => p.active).length} documents · handbook, code of conduct, leave, payroll
+            {store.getPoliciesForUser(emp, { activeOnly: true }).length} documents assigned to you
           </div>
         </div>
-        <Icon name="chevron-right" className="w-4 h-4 text-slate-300 shrink-0"/>
+        {(() => {
+          const pendingCount = store.getPendingAcknowledgements(emp).length;
+          return pendingCount > 0
+            ? <Badge tone="amber">{pendingCount}</Badge>
+            : <Icon name="chevron-right" className="w-4 h-4 text-slate-300 shrink-0"/>;
+        })()}
       </button>
 
       {/* Account actions */}

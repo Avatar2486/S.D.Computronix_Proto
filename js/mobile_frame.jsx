@@ -22,7 +22,7 @@ function PhoneFrame({ children }) {
 function PhoneApp({ user, onLogout }) {
   const [tab, setTab] = useState('home');
   const store = useStore();
-  const isEmp = user.role === 'field-employee';
+  const isEmp = roleOf(user) === 'field-employee';
   const isTeamLead = roleOf(user) === 'site-manager';
   /* Team Lead is the other mobile-only seat (isMobileOnlyRole = field-employee
      OR site-manager). This governs which record the phone opens on — it used
@@ -148,7 +148,7 @@ function PhoneApp({ user, onLogout }) {
       </div>
 
       {docsOpen && <MobileDocsSheet emp={emp} onClose={() => setDocsOpen(false)}/>}
-      {policiesOpen && <MobilePoliciesSheet onClose={() => setPoliciesOpen(false)}/>}
+      {policiesOpen && <MobilePoliciesSheet emp={emp} onClose={() => setPoliciesOpen(false)}/>}
       {notifOpen && <MobileNotifPanel emp={emp} onClose={() => setNotifOpen(false)}/>}
       {tourOpen && <TourOverlay mobile steps={MOBILE_TOUR_STEPS} onNavigate={setTab} onClose={closeTour}/>}
     </PhoneFrame>

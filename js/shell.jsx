@@ -418,6 +418,13 @@ const NAV_ITEMS = [
     ],
     badge: (s) => s.getRegularisations({ status: 'pending' }).length },
   { id: 'appreciation', section: 'People',  label: 'Appreciation', icon: 'award',       roles: ['admin','hr-manager','site-manager'] },
+  /* Customer-submitted feedback is a separate, moderated channel from internal
+     Kudos — a customer never reaches an internal action, and this page is
+     where a moderation decision is made, so it stays with the roles that can
+     already decide things about people (Admin/HR), not the whole People
+     section. */
+  { id: 'feedback',  section: 'People',  label: 'Customer Feedback', icon: 'sparkle', roles: ['admin','hr-manager'],
+    badge: (s) => s.getFeedback({ status: 'pending' }).length },
 
   /* Payroll's three blocks are stacked cards rather than tabs, so these scroll
      to the block instead of switching one. */
@@ -560,6 +567,7 @@ function AdminApp({ user, splitMode, nav, navArg, setNav, mobileNavOpen, setMobi
       case 'incentives':   return <IncentivesPage user={user} navArg={arg}/>;
       case 'sites':        return <SitesPage user={user} navArg={arg}/>;
       case 'appreciation': return <AppreciationPage user={user}/>;
+      case 'feedback':     return <CustomerFeedbackPage user={user}/>;
       case 'reports':      return <ReportsPage user={user} navArg={arg}/>;
       default:             return <OverviewPage user={user} onNavigate={setNav}/>;
     }

@@ -237,7 +237,8 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
       currentAddress: formatAddress(draft.address),
     });
     if (canSetPay && nextSalary !== (emp.baseSalary || 0)) {
-      Store.setSalary(emp.id, nextSalary, user.id, 'Edited from the employee record');
+      const salRes = Store.setSalary(emp.id, nextSalary, user, 'Edited from the employee record');
+      if (salRes && salRes.error) { toast(salRes.error, 'error'); return; }
     }
     toast('Employee details updated', 'success');
     setEditing(false);
@@ -686,7 +687,7 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
       </Modal>
 
       {designationOpen && <DesignationModal emp={emp} user={user} onClose={() => setDesignationOpen(false)}/>}
-      <OfferLetterModal emp={emp} open={canSeeDocs && offerOpen} onClose={() => setOfferOpen(false)}/>
+      <OfferLetterModal emp={emp} open={canSeeDocs && offerOpen} onClose={() => setOfferOpen(false)} user={user}/>
     </>
   );
 }
@@ -713,7 +714,8 @@ function SalaryCard({ emp, user }) {
     const v = Math.round(+amount || 0);
     if (v <= 0) { toast('Enter a monthly salary above zero', 'error'); return; }
     if (v === (emp.baseSalary || 0)) { setEditing(false); return; }
-    Store.setSalary(emp.id, v, user.id, note.trim());
+    const res = Store.setSalary(emp.id, v, user, note.trim());
+    if (res && res.error) { toast(res.error, 'error'); return; }
     toast(`Salary revised to ${fmtINR(v)} — payroll recomputes from this figure`, 'success');
     setNote(''); setEditing(false);
   };
@@ -1097,7 +1099,7 @@ function OnboardingQueue({ user, onOpen, onGoToPolicies }) {
         </div>
       </Card>
 
-      <OfferLetterModal emp={offerFor} open={!!offerFor} onClose={() => setOfferFor(null)}/>
+      <OfferLetterModal emp={offerFor} open={!!offerFor} onClose={() => setOfferFor(null)} user={user}/>
       {rejecting && <RejectReasonModal emp={rejecting} onClose={() => setRejecting(null)} onConfirm={doReject}/>}
     </div>
   );

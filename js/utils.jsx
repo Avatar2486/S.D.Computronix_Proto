@@ -11,6 +11,39 @@ const fmtINR = (n) => {
   const grouped = rest ? rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + last3 : last3;
   return (neg ? '-' : '') + '₹' + grouped;
 };
+/* Plain-language confirmation for a rupee figure — "₹18,000 (Rupees eighteen
+   thousand only)". Every editable salary/incentive/target/allowance is
+   supposed to show both the number and this, so a typo (₹180,000 for
+   ₹18,000) reads as obviously wrong before it's saved, not after. Integer
+   rupees only — nothing in this app edits paise. */
+const NUM_WORDS_ONES = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
+  'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+const NUM_WORDS_TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+function numberToWordsIndian(n) {
+  n = Math.round(Math.abs(+n || 0));
+  if (n === 0) return 'Rupees Zero only';
+  const under1000 = (v) => {
+    const parts = [];
+    if (v >= 100) { parts.push(NUM_WORDS_ONES[Math.floor(v / 100)] + ' Hundred'); v %= 100; }
+    if (v >= 20) { parts.push(NUM_WORDS_TENS[Math.floor(v / 10)] + (v % 10 ? ' ' + NUM_WORDS_ONES[v % 10] : '')); }
+    else if (v > 0) { parts.push(NUM_WORDS_ONES[v]); }
+    return parts.join(' ');
+  };
+  const crore = Math.floor(n / 10000000); n %= 10000000;
+  const lakh = Math.floor(n / 100000); n %= 100000;
+  const thousand = Math.floor(n / 1000); n %= 1000;
+  const rest = n;
+  const segments = [];
+  if (crore) segments.push(under1000(crore) + ' Crore');
+  if (lakh) segments.push(under1000(lakh) + ' Lakh');
+  if (thousand) segments.push(under1000(thousand) + ' Thousand');
+  if (rest) segments.push(under1000(rest));
+  return 'Rupees ' + segments.join(' ') + ' only';
+}
+/* `₹18,000 (Rupees eighteen thousand only)` — the standard combined form used
+   wherever an editable money field needs the plain-language confirmation. */
+const fmtINRWords = (n) => `${fmtINR(n)} (${numberToWordsIndian(n)})`;
+
 const fmtDate = (d, opts = {}) => {
   if (!d) return '—';
   const dt = new Date(d);
@@ -567,6 +600,11 @@ const STATUS_TONES = {
   upcoming:           ['slate',  'Upcoming'],
   'no-data':          ['slate',  'No log'],
   regularised:        ['violet', 'Regularised'],
+  // Payroll run states: Draft → Reviewed → Approved → Processed → Paid → Locked
+  reviewed:           ['brand',  'Reviewed'],
+  processed:          ['violet', 'Processed'],
+  paid:               ['green',  'Paid'],
+  locked:             ['slate',  'Locked'],
 };
 function StatusBadge({ status, label, className = '' }) {
   const [tone, text] = STATUS_TONES[status] || ['slate', status || '—'];
@@ -797,9 +835,13 @@ const PERMISSIONS = {
      instead of `incentive.edit`/`target.edit`. This was a real bug: HR used
      to hold both, letting HR open, save and bulk-replace incentive
      configuration. */
+  /* Payroll advances Draft → Reviewed → Approved → Processed → Paid → Locked.
+     HR can move a run into Reviewed (that's the review, not the approval) —
+     everything past that (Approved/Processed/Paid/Locked) is `payroll.approve`,
+     Admin only, same asymmetry as incentives: HR prepares, Admin commits. */
   'hr-manager':     ['employee.view','employee.create','employee.edit','employee.submit','document.view','document.upload','designation.edit','geofence.edit',
-                     'salary.view','attendance.view','attendance.decide','payroll.view','incentive.view','target.view',
-                     'site.view','policy.view','policy.edit','report.view','kudos.send'],
+                     'salary.view','attendance.view','attendance.decide','payroll.view','payroll.review','incentive.view','target.view',
+                     'site.view','site.edit','policy.view','policy.edit','report.view','kudos.send','feedback.moderate','feedback.generate'],
   /* Team Lead: read their own technicians, nothing that writes to a personnel
      record, decides a correction, reveals earnings, or opens a personal file.
 
@@ -969,7 +1011,7 @@ function Pagination({ page, pages, total, per, onPage, unit = 'rows' }) {
 
 // Expose to global scope for other Babel scripts
 Object.assign(window, {
-  fmtINR, fmtINRShort, fmtDate, fmtDateTime, fmtTime, fmtMonth, pctOf, useStore, useToast, ToastProvider, ToastCtx,
+  fmtINR, fmtINRShort, fmtINRWords, numberToWordsIndian, fmtDate, fmtDateTime, fmtTime, fmtMonth, pctOf, useStore, useToast, ToastProvider, ToastCtx,
   Icon, Btn, Badge, Card, Avatar, EmployeeIdentity, StoreIdentity, StatCard, Modal, Field, Input, Select, SearchSelect, Textarea, Empty,
   Tabs, PageHeader, StatusBadge, STATUS_TONES, FilterBar, FilterChips, PhotoUpload, EmailField,
   IncentiveAmount, ProgressBar, Pagination, TimeInput,

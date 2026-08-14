@@ -13,10 +13,12 @@ function MobileHome({ emp, setTab }) {
   const kudos = store.getKudos(emp.id);
   const payJul = store.computePayslip(emp.id, july);
 
-  // Hours on shift so far, against the store's published shift window.
+  // Hours on shift so far, against the store's published shift window. Clamped
+  // at zero: a late clock-in (or one written in by an approved regularisation
+  // after the old fixed reference time) used to produce a negative duration.
   const shiftEnd = site && site.shiftEnd ? site.shiftEnd : '19:00';
   const onShiftFor = clockIn && !clockOut
-    ? ((new Date('2026-07-15T12:30:00+05:30') - new Date(clockIn.timestamp)) / 3600000)
+    ? Math.max(0, (Store.TODAY - new Date(clockIn.timestamp)) / 3600000)
     : null;
 
   const fmtShort = (n) => (n >= 100000 ? '₹' + (n / 100000).toFixed(n % 100000 ? 1 : 0) + 'L' : n >= 1000 ? '₹' + Math.round(n / 1000) + 'k' : '₹' + n);

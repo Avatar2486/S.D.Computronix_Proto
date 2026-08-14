@@ -72,6 +72,17 @@
     { id: 'office', label: 'Office / Desktop Employee', geoFenceDefault: false, needsStore: false },
   ];
 
+  /* Employment BASIS is a separate axis from employeeType above: `employeeType`
+     is about WHERE someone works (store vs desk), `employmentBasis` is about
+     HOW they are employed (contract vs full-time). All technicians happen to
+     be on contract today, so `field` defaults here to `contract` — but this
+     stays a real, always-editable choice, not a hard-coded rule, because nothing
+     about being a field employee requires being a contractor. */
+  const EMPLOYMENT_BASIS = [
+    { id: 'contract',  label: 'Contract',  hint: 'Fixed-term engagement · seeded default for field/technician roles' },
+    { id: 'full-time', label: 'Full-time', hint: 'Permanent employment · PF/TDS configuration applies' },
+  ];
+
   /* Career ladders, ordered lowest → highest. "Upgrade designation" walks a
      person up their own ladder; the UI also allows any designation to be picked
      outright for lateral moves. */
@@ -144,6 +155,18 @@
       address: { ...BLANK_ADDRESS, ...(e.address || {}) },
       education: e.education || [],
       photoUrl: e.photoUrl || null,
+      // Seeded technician default is contract, per the brief — but always a
+      // real, independently-editable choice, never inferred from role alone
+      // once a record carries its own value.
+      employmentBasis: e.employmentBasis || (type === 'office' ? 'full-time' : 'contract'),
+      pf: e.pf || { applicable: (e.employmentBasis || (type === 'office' ? 'full-time' : 'contract')) === 'full-time', uan: '' },
+      tds: e.tds || { applicable: false },
+      salaryCycle: e.salaryCycle || 'monthly',
+      // Offer-letter lifecycle is distinct from `approvalStatus` (record
+      // approval) — a record can be Active with its offer still sitting in
+      // Draft if nobody has generated the letter yet.
+      offerStatus: e.offerStatus || 'draft',
+      offerHistory: e.offerHistory || [],
     };
   }
 
@@ -164,7 +187,10 @@
       city: s.city, region: s.region, zone: s.zone, bm: s.bm, cm: s.cm,
       slabId: s.slabId, netValue: s.netValue,
     }));
-    const sites = demoSites.concat(realSites);
+    const sites = demoSites.concat(realSites).map((s) => ({
+      active: true, deactivatedAt: null, deactivatedBy: null, deactivationReason: null, deactivationHistory: [],
+      ...s,
+    }));
 
     // ----- demo employees (kept for lively demo) -----
     const addr = (line1, city, district, state, pincode) => ({
@@ -342,19 +368,35 @@
     ];
 
     // ---- company policies / HR document library ----
-    const policyDoc = (title, category, summary, version, updated) => ({
-      id: slugId('pol', title), title, category, summary, version,
-      fileName: title.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-v' + version + '.pdf',
-      active: true, updatedAt: iso(updated), updatedBy: 'Neha Kapoor', acknowledgeRequired: true,
-      body: summary,
-    });
+    /* `audience` is the distribution rule: empty on every dimension means "All
+       employees", chosen explicitly rather than assumed — every policy below
+       defaults to that. Two are seeded with a non-empty audience purely as a
+       configuration EXAMPLE (brief §4: "seed examples; allow Admin
+       configuration") — which roles a real policy should target is business
+       input this prototype does not have, so treat these two as illustrative,
+       not as settled fact. `versions` starts with one entry so every policy
+       has real version history from the first read, not just a bare number. */
+    const BLANK_AUDIENCE = { roles: [], siteIds: [], zones: [], designations: [], employeeIds: [] };
+    const policyDoc = (title, category, summary, version, updated, audience) => {
+      const fileName = title.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-v' + version + '.pdf';
+      const updatedAt = iso(updated);
+      return {
+        id: slugId('pol', title), title, category, summary, version, fileName,
+        active: true, updatedAt, updatedBy: 'Neha Kapoor', acknowledgeRequired: true,
+        body: summary,
+        audience: audience || { ...BLANK_AUDIENCE },
+        versions: [{ version, fileName, updatedAt, updatedBy: 'Neha Kapoor', changeNote: 'Initial version' }],
+      };
+    };
     const policies = [
       policyDoc('Company Policy Handbook', 'Policy', 'Company-wide operating principles, working hours, dress code and escalation paths for all S.D. Computronix staff.', '3.1', new Date(2026, 3, 12)),
       policyDoc('Employee Handbook', 'Handbook', 'Everything a new joiner needs in their first 30 days — org structure, tools, benefits, and who to ask for what.', '2.4', new Date(2026, 1, 8)),
       policyDoc('Code of Conduct', 'Policy', 'Expected professional behaviour with customers and colleagues, conflict-of-interest rules, and the anti-harassment policy.', '2.0', new Date(2025, 10, 20)),
-      policyDoc('Attendance Policy', 'Policy', 'Shift timings, geo-fenced clock-in rules, late-mark treatment, and how attendance regularisation requests are decided.', '4.0', new Date(2026, 5, 2)),
+      // Example: a field-operations policy scoped to the roles who actually run a store's day.
+      policyDoc('Attendance Policy', 'Policy', 'Shift timings, geo-fenced clock-in rules, late-mark treatment, and how attendance regularisation requests are decided.', '4.0', new Date(2026, 5, 2), { ...BLANK_AUDIENCE, roles: ['field-employee', 'site-manager'] }),
       policyDoc('Leave Policy', 'Policy', 'Casual, sick and earned leave entitlements, carry-forward limits, and the approval chain for each leave type.', '2.2', new Date(2026, 2, 15)),
-      policyDoc('Salary & Payroll Policy', 'Payroll', 'Pay cycle, pro-rating for absence, statutory deductions (PF, ESIC, PT), incentive settlement and payslip access.', '3.0', new Date(2026, 4, 1)),
+      // Example: an internal payroll-operations policy scoped to the roles who run payroll.
+      policyDoc('Salary & Payroll Policy', 'Payroll', 'Pay cycle, pro-rating for absence, statutory deductions (PF, ESIC, PT), incentive settlement and payslip access.', '3.0', new Date(2026, 4, 1), { ...BLANK_AUDIENCE, roles: ['admin', 'hr-manager'] }),
       policyDoc('IT & Asset Policy', 'IT', 'Issued device handling, acceptable use, software installation rules, and the return process on exit.', '1.6', new Date(2025, 8, 30)),
       policyDoc('Information Security Policy', 'Security', 'Customer data handling, password standards, device developer-mode prohibition, and incident reporting.', '2.1', new Date(2026, 0, 18)),
     ];
@@ -367,7 +409,16 @@
       payrolls: [],
       incentiveUploads: [],
       incentiveAudit: [],
-      config: { workingDays: 30, pfPct: 0.12, esicPct: 0.0075, pt: 200, defaultTravelAllowance: 1500 },
+      policyAcks: [],
+      payslipQueries: [],
+      storeTargetUploads: [],
+      feedback: [],
+      feedbackTokens: [],
+      /* tdsPct is a flat placeholder, not a real slab-based TDS computation —
+         actual applicability depends on total annual income, declarations and
+         exemptions this prototype does not model. It only ever applies when
+         an employee's own `tds.applicable` is turned on (never assumed). */
+      config: { workingDays: 30, pfPct: 0.12, esicPct: 0.0075, pt: 200, defaultTravelAllowance: 1500, tdsPct: 0.10 },
     };
   }
 
@@ -457,9 +508,21 @@
         // Persisted state can predate fields the current UI reads; top it up
         // rather than discarding the user's edits.
         state.employees = (state.employees || []).map(normaliseEmployee);
+        state.sites = (state.sites || []).map((s) => ({
+          active: true, deactivatedAt: null, deactivatedBy: null, deactivationReason: null, deactivationHistory: [],
+          ...s,
+        }));
         state.storeTargets = state.storeTargets || [];
-        state.policies = state.policies || [];
+        state.policies = (state.policies || []).map((p) => ({
+          ...p,
+          audience: p.audience || { roles: [], siteIds: [], zones: [], designations: [], employeeIds: [] },
+          versions: p.versions && p.versions.length ? p.versions : [{ version: p.version, fileName: p.fileName, updatedAt: p.updatedAt, updatedBy: p.updatedBy, changeNote: 'Initial version' }],
+        }));
+        state.policyAcks = state.policyAcks || [];
         state.incentiveAudit = state.incentiveAudit || [];
+        state.storeTargetUploads = state.storeTargetUploads || [];
+        state.feedback = state.feedback || [];
+        state.feedbackTokens = state.feedbackTokens || [];
         buildIndexes();
         return;
       }
@@ -812,7 +875,15 @@
     const { presentDays, absentDays, workingDays } = countAttendance(empId, month);
     const dailyRate = emp.baseSalary / workingDays;
     const absenceDeduction = Math.round(absentDays * dailyRate);
-    const pf = Math.round(state.config.pfPct * emp.baseSalary);
+    /* PF is never assumed — it only applies when the employee's own record
+       says so (Full-time defaults it on, Contract off, either can be
+       overridden). Same for TDS, which is additionally a flat placeholder
+       rate rather than a real computation (see config.tdsPct). ESIC/PT stay
+       as they were: flat statutory figures applied to every payslip. */
+    const pfApplicable = !!(emp.pf && emp.pf.applicable);
+    const tdsApplicable = !!(emp.tds && emp.tds.applicable);
+    const pf = pfApplicable ? Math.round(state.config.pfPct * emp.baseSalary) : 0;
+    const tds = tdsApplicable ? Math.round(state.config.tdsPct * emp.baseSalary) : 0;
     const esic = Math.round(state.config.esicPct * emp.baseSalary);
     const pt = state.config.pt;
     const sales = getSales(empId, month)?.totalSales || 0;
@@ -823,27 +894,75 @@
       : calcIncentive(sales, emp, month);
     const incentive = incResult.payout;
     const travelAllowance = emp.travelEligible ? (emp.travelAmount || state.config.defaultTravelAllowance) : 0;
-    const netPay = emp.baseSalary - absenceDeduction - (pf + esic + pt) + incentive + travelAllowance;
+    const netPay = emp.baseSalary - absenceDeduction - (pf + esic + pt + tds) + incentive + travelAllowance;
+    const run = getPayrollRun(month);
     return {
       employeeId: empId, month, workingDays, presentDays, absentDays,
       base: emp.baseSalary, absenceDeduction,
-      statutory: { pf, esic, pt, total: pf + esic + pt },
+      employmentBasis: emp.employmentBasis, salaryCycle: emp.salaryCycle,
+      statutory: { pf, pfApplicable, esic, pt, tds, tdsApplicable, total: pf + esic + pt + tds },
       sales, incentive, incentiveSlab: incResult.slab, travelAllowance,
       incentiveBreakdown: incResult.breakdown || null, incentiveCapped: !!incResult.capped,
       incentiveWinner: incResult.winner || 'slab', incentiveMaxEligible: incResult.maxEligible || 0,
       netPay,
+      // The state this figure is actually in — never implied by the mere
+      // existence of a number. "Estimated" until Processed, "Credited" only
+      // once Paid or Locked.
+      payrollStatus: run ? run.status : 'draft',
     };
   }
 
-  function runPayroll(month) {
-    const emps = getEmployees({ status: 'active' });
-    const payslips = emps.map((e) => computePayslip(e.id, month));
-    const run = { id: uid('run'), month, processedAt: iso(new Date()), status: 'processed', count: payslips.length };
-    state.payrolls = state.payrolls.filter((r) => r.month !== month).concat([run]);
-    persist(); emit();
-    return run;
+  /* ---------- payroll state machine ----------
+     Draft → Reviewed → Approved → Processed → Paid → Locked, one step at a
+     time. HR may move a run into Reviewed; everything from Approved onward is
+     Admin-only. `isPeriodLocked` is what attendance/salary edits check before
+     touching a period that has already been finalised. */
+  const PAYROLL_STATES = ['draft', 'reviewed', 'approved', 'processed', 'paid', 'locked'];
+  const getPayrollRun = (month) => (state.payrolls || []).find((r) => r.month === month);
+  function isPeriodLocked(month) {
+    const run = getPayrollRun(month);
+    return !!run && ['processed', 'paid', 'locked'].includes(run.status);
   }
-  const getPayrollRun = (month) => state.payrolls.find((r) => r.month === month);
+  /* Whether ANY period has been finalised, and which one — used to block
+     salary edits everywhere. The data model does not keep a month-scoped
+     salary snapshot (only a single current `baseSalary` plus a change log),
+     so `computePayslip` for a past month always reads today's figure. Until
+     that snapshot exists, the safe rule is: once any period is Processed or
+     later, salary is frozen everywhere rather than risk silently rewriting a
+     period that has already been finalised. */
+  function getPayrollLockInfo() {
+    const locked = (state.payrolls || []).filter((r) => ['processed', 'paid', 'locked'].includes(r.status))
+      .sort((a, b) => (b.month || '').localeCompare(a.month || ''))[0];
+    if (!locked) return { locked: false };
+    return { locked: true, month: locked.month, status: locked.status, at: locked.processedAt || locked.history?.[locked.history.length - 1]?.at };
+  }
+  function transitionPayroll(month, toStatus, actor) {
+    if (!PAYROLL_STATES.includes(toStatus)) return { error: 'Unknown payroll state.' };
+    const action = ['approved', 'processed', 'paid', 'locked'].includes(toStatus) ? 'payroll.approve' : 'payroll.review';
+    return guarded(actor, action, () => {
+      if (!state.payrolls) state.payrolls = [];
+      let run = state.payrolls.find((r) => r.month === month);
+      const fromIdx = run ? PAYROLL_STATES.indexOf(run.status) : -1;
+      const toIdx = PAYROLL_STATES.indexOf(toStatus);
+      if (toIdx !== fromIdx + 1) {
+        return { error: `Cannot move ${month} from "${run ? run.status : 'not started'}" to "${toStatus}" — states advance one step at a time.` };
+      }
+      const byName = actor ? (actor.name || actor.id) : null;
+      if (!run) {
+        run = { id: uid('run'), month, status: toStatus, history: [], count: getEmployees({ status: 'active' }).length };
+        state.payrolls.push(run);
+      } else {
+        run.status = toStatus;
+      }
+      run.history = (run.history || []).concat([{ status: toStatus, at: iso(new Date()), by: byName }]);
+      if (toStatus === 'processed') run.processedAt = iso(new Date());
+      if (toStatus === 'paid') run.paidAt = iso(new Date());
+      persist(); emit();
+      return run;
+    });
+  }
+  /* Friendlier name for the first transition — starts a run in Draft. */
+  const runPayroll = (month, actor) => transitionPayroll(month, 'draft', actor);
 
   // ---------- mutations ----------
   function invalidate() { state._eidx = null; state._sidx = null; achieveCache = {}; }
@@ -954,22 +1073,32 @@
   }
 
   /* ---------- salary ----------
-     HR and Admin may set pay; every change is stamped so the payroll figure can
-     always be traced back to who approved it. */
-  function setSalary(empId, amount, byUserId, note) {
-    const e = getEmployee(empId); if (!e) return null;
-    const from = +e.baseSalary || 0;
-    const to = Math.max(0, Math.round(+amount || 0));
-    if (from === to) return null;
-    e.salaryHistory = (e.salaryHistory || []).concat([{
-      from, to, at: iso(new Date()), by: byUserId || null, note: note || '',
-    }]);
-    e.baseSalary = to;
-    state.notifications.push({ id: uid('ntf'), employeeId: empId, type: 'payroll',
-      message: `Your monthly salary was revised to ₹${to.toLocaleString('en-IN')}.`,
-      read: false, timestamp: iso(new Date()) });
-    persist(); emit();
-    return e.salaryHistory[e.salaryHistory.length - 1];
+     Only an Admin may set pay (guarded below); every change is stamped so the
+     payroll figure can always be traced back to who approved it. `actor` is
+     the full acting user (not just an id) so the guard and the lock check
+     both have what they need — pass the same value HR/Admin call sites
+     already have in scope. */
+  function setSalary(empId, amount, actor, note) {
+    return guarded(actor, 'salary.edit', () => {
+      const lock = getPayrollLockInfo();
+      if (lock.locked) {
+        return { error: `Locked: ${lock.month} payroll was ${lock.status} on ${lock.at ? dateKey(lock.at) : 'an earlier date'} — salary cannot be revised until that period is reopened.` };
+      }
+      const e = getEmployee(empId); if (!e) return { error: 'Employee not found.' };
+      const from = +e.baseSalary || 0;
+      const to = Math.max(0, Math.round(+amount || 0));
+      if (from === to) return null;
+      const byUserId = actor ? actor.id : null;
+      e.salaryHistory = (e.salaryHistory || []).concat([{
+        from, to, at: iso(new Date()), by: byUserId, note: note || '',
+      }]);
+      e.baseSalary = to;
+      state.notifications.push({ id: uid('ntf'), employeeId: empId, type: 'payroll',
+        message: `Your monthly salary was revised to ₹${to.toLocaleString('en-IN')}.`,
+        read: false, timestamp: iso(new Date()) });
+      persist(); emit();
+      return e.salaryHistory[e.salaryHistory.length - 1];
+    });
   }
 
   /* Document approval mirrors employee approval: an upload by a non-Admin lands
@@ -1007,6 +1136,83 @@
 
   const setGeoFence = (empId, enabled) => updateEmployee(empId, { geoFenceEnabled: !!enabled });
 
+  /* ---------- employment basis / statutory configuration ---------- */
+  function setEmploymentBasis(empId, basis, actor) {
+    return guarded(actor, 'employee.edit', () => {
+      const e = getEmployee(empId); if (!e) return { error: 'Employee not found.' };
+      const from = e.employmentBasis;
+      e.employmentBasis = basis;
+      persist(); emit();
+      return { from, to: basis };
+    });
+  }
+  function setStatutoryConfig(empId, patch, actor) {
+    return guarded(actor, 'employee.edit', () => {
+      const e = getEmployee(empId); if (!e) return { error: 'Employee not found.' };
+      if (patch.pf) e.pf = { ...e.pf, ...patch.pf };
+      if (patch.tds) e.tds = { ...e.tds, ...patch.tds };
+      persist(); emit();
+      return { pf: e.pf, tds: e.tds };
+    });
+  }
+
+  /* ---------- offer-letter lifecycle ----------
+     Draft → pending-ack (generated, waiting on the employee) → admin-review
+     (employee signed, waiting on Admin) → approved (issued). `returned` loops
+     back for a fresh draft with a reason attached. A PDF existing in the
+     browser is not the same thing as "issued" — only `approved` is. */
+  const OFFER_STATES = ['draft', 'pending-ack', 'admin-review', 'approved', 'returned'];
+  function logOfferHistory(e, status, by, note) {
+    e.offerHistory = (e.offerHistory || []).concat([{ status, at: iso(new Date()), by: by || null, note: note || '' }]);
+  }
+  function generateOfferLetter(empId, actor) {
+    return guarded(actor, 'employee.edit', () => {
+      const e = getEmployee(empId); if (!e) return { error: 'Employee not found.' };
+      if (!(+e.baseSalary > 0)) return { error: 'Set a salary before generating the offer letter.' };
+      if (!e.salaryCycle) return { error: 'Set a salary cycle before generating the offer letter.' };
+      e.offerStatus = 'pending-ack';
+      logOfferHistory(e, 'pending-ack', actor ? (actor.name || actor.id) : null, 'Offer letter generated');
+      persist(); emit();
+      return e;
+    });
+  }
+  /* The employee's own action — no permission gate, since this genuinely is
+     the candidate's signature, not a management decision. */
+  function acknowledgeOffer(empId, byName) {
+    const e = getEmployee(empId); if (!e) return { error: 'Employee not found.' };
+    if (e.offerStatus !== 'pending-ack') return { error: `Cannot acknowledge from status "${e.offerStatus}".` };
+    e.offerStatus = 'admin-review';
+    logOfferHistory(e, 'admin-review', byName || e.name, 'Employee acknowledged / signed');
+    persist(); emit();
+    return e;
+  }
+  /* Final "Read and approve" — the brief specifically names the Admin for
+     this step, distinct from Admin/HR who may generate the letter, so it is
+     gated on the role directly rather than a shared permission action. */
+  function reviewOffer(empId, decision, actor, reason) {
+    if (!isAdminRole(canonicalRole(actor && actor.role))) return { error: 'Only an Admin may read and approve an offer letter.' };
+    const e = getEmployee(empId); if (!e) return { error: 'Employee not found.' };
+    if (e.offerStatus !== 'admin-review') return { error: `Cannot decide from status "${e.offerStatus}".` };
+    if (decision === 'approved') {
+      e.offerStatus = 'approved';
+      logOfferHistory(e, 'approved', actor.name || actor.id, 'Read and approved — issued');
+    } else {
+      e.offerStatus = 'returned';
+      logOfferHistory(e, 'returned', actor.name || actor.id, reason || 'Returned for correction');
+    }
+    persist(); emit();
+    return e;
+  }
+  function regenerateOfferLetter(empId, actor) {
+    return guarded(actor, 'employee.edit', () => {
+      const e = getEmployee(empId); if (!e) return { error: 'Employee not found.' };
+      e.offerStatus = 'draft';
+      logOfferHistory(e, 'draft', actor ? (actor.name || actor.id) : null, 'Returned to draft for regeneration');
+      persist(); emit();
+      return e;
+    });
+  }
+
   /* ---------- email validation ----------
      Stands in for the address-verification API: syntax, disposable-domain and
      uniqueness checks, returning the same shape a real call would. */
@@ -1026,6 +1232,10 @@
   /* ---------- store targets ---------- */
   function upsertStoreTarget(target, actor) {
     return guarded(actor, 'target.edit', () => {
+      if (isPeriodLocked(target.period)) {
+        const run = getPayrollRun(target.period);
+        return { error: `Locked: ${target.period} payroll was ${run.status} — its store target can no longer be changed.` };
+      }
       if (!state.storeTargets) state.storeTargets = [];
       const before = target.id ? (state.storeTargets.find((t) => t.id === target.id) || null) : null;
       const next = {
@@ -1047,11 +1257,63 @@
   function deleteStoreTarget(id, actor) {
     return guarded(actor, 'target.edit', () => {
       const before = (state.storeTargets || []).find((t) => t.id === id) || null;
+      if (before && isPeriodLocked(before.period)) {
+        const run = getPayrollRun(before.period);
+        return { error: `Locked: ${before.period} payroll was ${run.status} — its store target can no longer be changed.` };
+      }
       state.storeTargets = (state.storeTargets || []).filter((t) => t.id !== id);
       if (before) logIncentiveAudit({ actor, action: 'target.deleted', targetType: 'target', targetId: id, before, after: null });
       achieveCache = {}; persist(); emit();
     });
   }
+
+  /* ---------- store target bulk upload ----------
+     Preview-then-confirm, same shape as the incentive bulk upload: nothing is
+     written until `commitStoreTargetUpload` is called with the rows the
+     caller actually confirmed, and every commit leaves a real upload record —
+     never a silent wholesale replace. */
+  function previewStoreTargetUpload(rows) {
+    const valid = [], invalid = [], duplicates = [];
+    const seen = new Set();
+    (rows || []).forEach((r, i) => {
+      const rowNum = i + 2; // header is row 1
+      const storeCode = String(r.storeCode || '').trim();
+      const site = state.sites.find((s) => s.code === storeCode);
+      if (!site) { invalid.push({ row: rowNum, storeCode, reason: 'Store Code not found' }); return; }
+      if (site.active === false) { invalid.push({ row: rowNum, storeCode, reason: 'Store is inactive' }); return; }
+      const amount = +r.amount;
+      if (!(amount > 0)) { invalid.push({ row: rowNum, storeCode, reason: 'Target amount must be a positive number' }); return; }
+      const period = String(r.period || '').trim();
+      if (!/^\d{4}-\d{2}$/.test(period)) { invalid.push({ row: rowNum, storeCode, reason: 'Period must be YYYY-MM' }); return; }
+      if (isPeriodLocked(period)) { invalid.push({ row: rowNum, storeCode, period, reason: `${period} payroll is locked — cannot set a target for it` }); return; }
+      const key = site.id + '|' + period;
+      if (seen.has(key)) { duplicates.push({ row: rowNum, storeCode, period, reason: 'Duplicate Store Code + Period within this file' }); return; }
+      seen.add(key);
+      const existing = getStoreTarget(site.id, period);
+      valid.push({
+        row: rowNum, siteId: site.id, storeCode: site.code, storeName: site.name, period, amount,
+        incentivePct: r.incentivePct != null && r.incentivePct !== '' ? +r.incentivePct : (existing ? existing.incentivePct : 5),
+        note: r.note || '', replaces: !!existing,
+      });
+    });
+    return { valid, invalid, duplicates, total: (rows || []).length };
+  }
+  function commitStoreTargetUpload(validRows, actor, meta) {
+    return guarded(actor, 'target.edit', () => {
+      if (!validRows || !validRows.length) return { error: 'Nothing to import.' };
+      const results = validRows.map((r) => upsertStoreTarget({ siteId: r.siteId, period: r.period, amount: r.amount, incentivePct: r.incentivePct, note: r.note }, actor));
+      const failed = results.filter((r) => r && r.error);
+      if (!state.storeTargetUploads) state.storeTargetUploads = [];
+      const upload = {
+        id: uid('stu'), uploadedAt: iso(new Date()), uploadedBy: actor ? (actor.name || actor.id) : null,
+        fileName: (meta && meta.fileName) || 'store_targets.csv', count: validRows.length - failed.length, failedCount: failed.length,
+      };
+      state.storeTargetUploads.unshift(upload);
+      persist(); emit();
+      return upload;
+    });
+  }
+  const getStoreTargetUploads = () => (state.storeTargetUploads || []);
   /* Everything a target card needs: the target, what the store actually did, and
      what that means in rupees for the staff posted there. */
   function getStoreTargetSummary(siteId, period) {
@@ -1070,25 +1332,122 @@
     };
   }
 
-  /* ---------- company policies / HR documents ---------- */
+  /* ---------- company policies / HR documents ----------
+
+     Distribution used to be "every active policy, to everyone" — no audience
+     concept existed at all. `matchesAudience` is the one resolver every
+     viewer-facing list goes through now, so a policy scoped to (say) field
+     staff never appears in an Admin's own reading list by accident, and
+     "All employees" is the audience you get only by leaving every dimension
+     empty, not an assumption baked into the absence of a rule. */
+  function matchesAudience(user, audience) {
+    if (!user) return false;
+    if (!audience) return true; // legacy record with no audience field at all = everyone, unchanged behaviour
+    const roles = audience.roles || [], siteIds = audience.siteIds || [], zones = audience.zones || [],
+      designations = audience.designations || [], employeeIds = audience.employeeIds || [];
+    const hasStructured = roles.length || siteIds.length || zones.length || designations.length;
+    if (!hasStructured && !employeeIds.length) return true; // "All employees", chosen explicitly
+    if (employeeIds.length && employeeIds.includes(user.id)) return true; // named override, always wins
+    if (!hasStructured) return false; // only named employees were targeted, and this isn't one of them
+    if (roles.length && !roles.includes(roleOf(user))) return false;
+    if (siteIds.length && !siteIds.includes(user.siteId)) return false;
+    if (designations.length && !designations.includes(user.designation)) return false;
+    if (zones.length) {
+      const site = user.siteId ? getSite(user.siteId) : null;
+      if (!site || !zones.includes(site.zone)) return false;
+    }
+    return true;
+  }
   const getPolicies = (opts) => (state.policies || [])
     .filter((p) => (opts && opts.activeOnly ? p.active : true))
     .slice()
     .sort((a, b) => (a.category || '').localeCompare(b.category || '') || (a.title || '').localeCompare(b.title || ''));
-  function upsertPolicy(policy, byName) {
-    if (!state.policies) state.policies = [];
-    const next = { ...policy, updatedAt: iso(new Date()), updatedBy: byName || policy.updatedBy || 'Admin' };
-    const i = state.policies.findIndex((p) => p.id === next.id);
-    if (i >= 0) state.policies[i] = { ...state.policies[i], ...next };
-    else state.policies.push({ ...next, id: next.id || uid('pol'), active: next.active !== false });
-    persist(); emit();
+  /* Exactly which active policy versions a given person must see — the
+     mobile Profile/Policies area and the onboarding acknowledgement step both
+     go through this rather than `getPolicies()` directly. */
+  function getPoliciesForUser(user, opts) {
+    const activeOnly = !opts || opts.activeOnly !== false;
+    return getPolicies({ activeOnly }).filter((p) => matchesAudience(user, p.audience));
   }
-  function deletePolicy(id) { state.policies = (state.policies || []).filter((p) => p.id !== id); persist(); emit(); }
-  function togglePolicy(id, active) {
-    const p = (state.policies || []).find((x) => x.id === id); if (!p) return;
-    p.active = active != null ? !!active : !p.active;
-    p.updatedAt = iso(new Date());
+  function upsertPolicy(policy, actor, opts) {
+    return guarded(actor, 'policy.edit', () => {
+      if (!state.policies) state.policies = [];
+      const byName = actor ? (actor.name || actor.id) : (policy.updatedBy || 'Admin');
+      const at = iso(new Date());
+      const i = state.policies.findIndex((p) => p.id === policy.id);
+      const prev = i >= 0 ? state.policies[i] : null;
+      const next = { ...prev, ...policy, updatedAt: at, updatedBy: byName };
+      next.audience = policy.audience || (prev ? prev.audience : { roles: [], siteIds: [], zones: [], designations: [], employeeIds: [] });
+      // A new file or a bumped version number is a substantive change — record
+      // it in history and (by construction, via isPolicyAcknowledged's version
+      // check) require re-acknowledgement from anyone who already signed off.
+      const isNewVersion = !prev || prev.fileName !== next.fileName || prev.version !== next.version;
+      next.versions = prev ? (prev.versions || []) : [];
+      if (isNewVersion) {
+        next.versions = [...next.versions, { version: next.version, fileName: next.fileName, updatedAt: at, updatedBy: byName, changeNote: (opts && opts.changeNote) || (prev ? 'New version published' : 'Initial version') }];
+      }
+      if (i >= 0) state.policies[i] = next;
+      else state.policies.push({ ...next, id: next.id || uid('pol'), active: next.active !== false });
+      persist(); emit();
+      return next;
+    });
+  }
+  function deletePolicy(id, actor) {
+    return guarded(actor, 'policy.edit', () => {
+      state.policies = (state.policies || []).filter((p) => p.id !== id);
+      persist(); emit();
+    });
+  }
+  function togglePolicy(id, active, actor) {
+    return guarded(actor, 'policy.edit', () => {
+      const p = (state.policies || []).find((x) => x.id === id); if (!p) return { error: 'Policy not found.' };
+      p.active = active != null ? !!active : !p.active;
+      p.updatedAt = iso(new Date());
+      persist(); emit();
+    });
+  }
+
+  // ---------- policy acknowledgement ----------
+  /* One ack per employee per policy, tagged with the version they acked —
+     re-acking (e.g. after a version bump) simply replaces the prior record,
+     so `isPolicyAcknowledged` only ever has to compare against the CURRENT
+     version rather than walk history. */
+  function acknowledgePolicy(policyId, empId) {
+    const p = (state.policies || []).find((x) => x.id === policyId);
+    if (!p) return { error: 'Policy not found.' };
+    if (!empId) return { error: 'No employee to acknowledge on behalf of.' };
+    if (!state.policyAcks) state.policyAcks = [];
+    state.policyAcks = state.policyAcks.filter((a) => !(a.policyId === policyId && a.employeeId === empId));
+    const ack = { id: uid('pack'), policyId, employeeId: empId, version: p.version, at: iso(new Date()) };
+    state.policyAcks.push(ack);
     persist(); emit();
+    return ack;
+  }
+  function isPolicyAcknowledged(policyId, empId) {
+    const p = (state.policies || []).find((x) => x.id === policyId);
+    if (!p) return false;
+    return (state.policyAcks || []).some((a) => a.policyId === policyId && a.employeeId === empId && a.version === p.version);
+  }
+  const getPolicyAcks = (filter) => (state.policyAcks || [])
+    .filter((a) => (!filter || !filter.policyId || a.policyId === filter.policyId))
+    .filter((a) => (!filter || !filter.employeeId || a.employeeId === filter.employeeId));
+  /* Every mandatory policy assigned to this person that they have not yet
+     acknowledged at the current version — the onboarding step and the mobile
+     "pending" nudge both read this one function. */
+  function getPendingAcknowledgements(user) {
+    if (!user) return [];
+    return getPoliciesForUser(user, { activeOnly: true })
+      .filter((p) => p.acknowledgeRequired && !isPolicyAcknowledged(p.id, user.id));
+  }
+  /* HR/Admin compliance view: who this policy is actually assigned to, and
+     how many of them have signed off at the current version. */
+  function getPolicyAckCoverage(policyId) {
+    const p = (state.policies || []).find((x) => x.id === policyId);
+    if (!p) return { audienceCount: 0, ackedCount: 0, audience: [] };
+    const everyone = getEmployees({ status: 'active' }).concat(getUsers());
+    const audience = everyone.filter((u) => matchesAudience(u, p.audience));
+    const acked = audience.filter((u) => isPolicyAcknowledged(p.id, u.id));
+    return { audienceCount: audience.length, ackedCount: acked.length, audience };
   }
 
   // Mobile sign-in: match on the employee's phone, ignoring +91 / spaces / dashes.
@@ -1214,8 +1573,38 @@
     return { used, limit: REG_MONTHLY_LIMIT, remaining: Math.max(0, REG_MONTHLY_LIMIT - used), month };
   }
 
-  function addRegularisation(req) {
+  function addRegularisation(req, actor) {
+    /* This is the one place every entry path funnels through — the day-cell
+       flow, the admin "raise on behalf of" picker, and the mobile self-service
+       panel. Only the day-cell flow used to enforce future-date/payroll-lock
+       rules, and only in the UI; the other two could submit a request for a
+       date that should never have been reachable. All three now hit the same
+       checks here, so a UI gap in any one of them can't bypass the rule. */
+    if (!actor) return { error: 'Not permitted — no acting user.' };
+    const selfService = actor.id === req.employeeId;
+    if (!selfService && !can(actor, 'attendance.decide')) {
+      return { error: 'Only HR or Admin may raise a regularisation on behalf of someone else.' };
+    }
+    const today = dateKey(TODAY);
+    if (String(req.date || '') > today) {
+      return { error: `${req.date} is a future date — regularisation cannot be raised ahead of time.` };
+    }
     const month = String(req.date || '').slice(0, 7);
+    if (isPeriodLocked(month)) {
+      const run = getPayrollRun(month);
+      return { error: `Locked: ${month} payroll was ${run.status} — this date can no longer be regularised.` };
+    }
+    // Only a time-correction ('adjust') is gated on the day actually having a
+    // correctable log — 'other' is a catch-all administrative request that
+    // isn't tied to rewriting a specific clock entry (see applyRegularisation,
+    // which never touches attendance for that type), so a weekly-off or a
+    // day with no marks is still a valid date to raise one against.
+    if ((req.type || 'adjust') === 'adjust') {
+      const log = getDayLog(req.employeeId, req.date);
+      if (!log.regularisable) {
+        return { error: `${req.date} is not open for a time correction (${log.status === 'upcoming' ? 'upcoming' : log.status === 'weekly-off' ? 'a weekly off' : 'no log to correct'}).` };
+      }
+    }
     const balance = getRegularisationBalance(req.employeeId, month);
     if (balance.remaining <= 0) {
       return { error: `No requests left for ${month} — the monthly limit is ${REG_MONTHLY_LIMIT}.` };
@@ -1226,7 +1615,7 @@
       entries: (req.entries || []).map((e) => ({ in: e.in || '', out: e.out || '', location: e.location || '' })),
       shift: req.shift || null,
       status: 'pending', decidedBy: null, decidedAt: null,
-      auditTrail: [{ at: iso(new Date()), by: req.employeeId, action: 'submitted' }],
+      auditTrail: [{ at: iso(new Date()), by: actor.id, action: 'submitted' }],
       ...req,
     };
     state.regularisations.push(full);
@@ -1261,13 +1650,23 @@
     });
   }
 
-  function decideRegularisation(id, decision, by) {
-    const r = state.regularisations.find((x) => x.id === id); if (!r) return;
-    r.status = decision; r.decidedBy = by; r.decidedAt = iso(new Date());
-    r.auditTrail.push({ at: iso(new Date()), by, action: decision });
-    if (decision === 'approved') applyRegularisation(r);
-    state.notifications.push({ id: uid('ntf'), employeeId: r.employeeId, type: 'regularisation', message: `Your regularisation for ${r.date} was ${decision}.`, read: false, timestamp: iso(new Date()) });
-    persist(); emit();
+  function decideRegularisation(id, decision, actor) {
+    return guarded(actor, 'attendance.decide', () => {
+      const r = state.regularisations.find((x) => x.id === id); if (!r) return { error: 'Request not found.' };
+      if (r.status !== 'pending') return { error: `Already ${r.status} — cannot decide again.` };
+      const month = String(r.date || '').slice(0, 7);
+      if (isPeriodLocked(month)) {
+        const run = getPayrollRun(month);
+        return { error: `Locked: ${month} payroll was ${run.status} — this request can no longer be decided.` };
+      }
+      const by = actor ? (actor.name || actor.id) : null;
+      r.status = decision; r.decidedBy = by; r.decidedAt = iso(new Date());
+      r.auditTrail.push({ at: iso(new Date()), by, action: decision });
+      if (decision === 'approved') applyRegularisation(r);
+      state.notifications.push({ id: uid('ntf'), employeeId: r.employeeId, type: 'regularisation', message: `Your regularisation for ${r.date} was ${decision}.`, read: false, timestamp: iso(new Date()) });
+      persist(); emit();
+      return r;
+    });
   }
   // legacy global slab CRUD (kept)
   function upsertSlab(slab, actor) {
@@ -1331,30 +1730,59 @@
   }
 
   function upsertSite(site, actor) {
-    // Manager ids are the source of truth; keep the legacy name fields in step so
-    // the store table, search and CSV export keep showing readable names.
-    const tl = getTeamLead(site.teamLeadId);
-    const bm = getBusinessManager(site.bmId);
-    const next = { ...site, cm: tl ? tl.name : (site.teamLeadId ? site.cm : ''), bm: bm ? bm.name : (site.bmId ? site.bm : '') };
-    if (next.managerId) { const e = getEmployee(next.managerId); if (e) e.isStoreManager = true; }
+    return guarded(actor, 'site.edit', () => {
+      // Manager ids are the source of truth; keep the legacy name fields in step so
+      // the store table, search and CSV export keep showing readable names.
+      const tl = getTeamLead(site.teamLeadId);
+      const bm = getBusinessManager(site.bmId);
+      const next = { ...site, cm: tl ? tl.name : (site.teamLeadId ? site.cm : ''), bm: bm ? bm.name : (site.bmId ? site.bm : '') };
+      if (next.managerId) { const e = getEmployee(next.managerId); if (e) e.isStoreManager = true; }
 
-    /* Incentive slab assignment rides along on the same form as the rest of the
-       store record, but it is still an incentive edit — an actor without
-       `incentive.edit` (HR, Team Lead) cannot change it here either, even
-       though they may be allowed to save the store's other fields. Rather than
-       reject the whole save, silently hold the incentive-affecting fields at
-       their previous value so the rest of the edit still goes through. */
-    const existing = next.id ? state.sites.find((s) => s.id === next.id) : null;
-    if (!actorAllowed(actor, 'incentive.edit')) {
-      next.slabId = existing ? existing.slabId : next.slabId;
-      next.incentives = existing ? existing.incentives : next.incentives;
-    }
+      /* Incentive slab assignment rides along on the same form as the rest of the
+         store record, but it is still an incentive edit — an actor with
+         `site.edit` but not `incentive.edit` (HR) cannot change it here either,
+         even though they may save the store's other fields. Rather than reject
+         the whole save, silently hold the incentive-affecting fields at their
+         previous value so the rest of the edit still goes through. */
+      const existing = next.id ? state.sites.find((s) => s.id === next.id) : null;
+      if (!actorAllowed(actor, 'incentive.edit')) {
+        next.slabId = existing ? existing.slabId : next.slabId;
+        next.incentives = existing ? existing.incentives : next.incentives;
+      }
 
-    if (existing) { const i = state.sites.findIndex((s) => s.id === next.id); state.sites[i] = next; }
-    else state.sites.push({ ...next, id: next.id || uid('site') });
-    invalidate(); persist(); emit();
+      if (existing) { const i = state.sites.findIndex((s) => s.id === next.id); state.sites[i] = { ...existing, ...next }; }
+      else state.sites.push({ active: true, deactivatedAt: null, deactivatedBy: null, deactivationReason: null, deactivationHistory: [], ...next, id: next.id || uid('site') });
+      invalidate(); persist(); emit();
+      return next;
+    });
   }
-  function deleteSite(id) { state.sites = state.sites.filter((s) => s.id !== id); invalidate(); persist(); emit(); }
+  function deleteSite(id, actor) {
+    return guarded(actor, 'site.edit', () => {
+      state.sites = state.sites.filter((s) => s.id !== id);
+      invalidate(); persist(); emit();
+    });
+  }
+  /* Soft-delete only — a store with historical attendance/payroll/incentive
+     records tied to it should never disappear outright. Deactivating removes
+     it from active pickers but keeps it (and its history) visible behind a
+     "show inactive" toggle. */
+  function setSiteActive(siteId, active, reason, actor) {
+    return guarded(actor, 'site.edit', () => {
+      const s = getSite(siteId); if (!s) return { error: 'Store not found.' };
+      const wasActive = s.active !== false;
+      if (wasActive === !!active) return s; // no-op
+      s.active = !!active;
+      const by = actor ? (actor.name || actor.id) : null;
+      s.deactivatedAt = active ? null : iso(new Date());
+      s.deactivatedBy = active ? null : by;
+      s.deactivationReason = active ? null : (reason || '');
+      s.deactivationHistory = (s.deactivationHistory || []).concat([{
+        action: active ? 'reactivated' : 'deactivated', at: iso(new Date()), by, reason: reason || '',
+      }]);
+      invalidate(); persist(); emit();
+      return s;
+    });
+  }
   function updateSales(empId, month, totalSales) {
     let rec = getSales(empId, month);
     if (!rec) { rec = { id: uid('sal'), employeeId: empId, month, totalSales }; state.salesRecords.push(rec); salesIndex[empId + '|' + month] = rec; }
@@ -1364,6 +1792,110 @@
   }
   function markNotificationRead(id) { const n = state.notifications.find((x) => x.id === id); if (n) { n.read = true; persist(); emit(); } }
   function markAllRead(empId) { state.notifications.filter((n) => n.employeeId === empId).forEach((n) => (n.read = true)); persist(); emit(); }
+
+  /* A real (if lightweight) payslip dispute route — the query is persisted,
+     not just a toast, and lands in the same notification feed HR/Admin
+     already see everything else through (TopBar shows the unfiltered feed to
+     any non-mobile-only role). It never changes pay by itself. */
+  function reportPayslipIssue(empId, month, note, actor) {
+    const emp = getEmployee(empId); if (!emp) return { error: 'Employee not found.' };
+    if (!state.payslipQueries) state.payslipQueries = [];
+    const q = { id: uid('pq'), empId, month, note, at: iso(new Date()), by: actor ? (actor.name || actor.id) : null, status: 'open' };
+    state.payslipQueries.push(q);
+    state.notifications.push({ id: uid('ntf'), employeeId: empId, type: 'payslip-query',
+      message: `${emp.name} (${emp.code}) raised a payslip query for ${month}: "${note}"`,
+      read: false, timestamp: iso(new Date()) });
+    persist(); emit();
+    return q;
+  }
+  const getPayslipQueries = (filter) => (state.payslipQueries || [])
+    .filter((q) => !filter || !filter.empId || q.empId === filter.empId);
+
+  /* ---------- customer feedback ----------
+     A customer never signs in — the only "authentication" is possession of an
+     opaque, single-use, expiring token generated by Admin/HR for a specific
+     technician (optionally a specific store). This is explicitly a demo-safe
+     placeholder, not a real customer-identity check (brief's own table calls
+     this out as business input the prototype doesn't have); the UI says so
+     wherever the token is generated or used. Feedback never touches
+     incentives by itself — `linkedToIncentive` stays false unless a future,
+     explicitly separate workflow sets it, and nothing in the incentive engine
+     reads this data at all. */
+  const FEEDBACK_TOKEN_TTL_DAYS = 14;
+  function generateFeedbackToken(empId, siteId, actor) {
+    return guarded(actor, 'feedback.generate', () => {
+      const emp = getEmployee(empId); if (!emp) return { error: 'Employee not found.' };
+      const site = siteId ? getSite(siteId) : (emp.siteId ? getSite(emp.siteId) : null);
+      if (!state.feedbackTokens) state.feedbackTokens = [];
+      const token = uid('fbtok').replace('fbtok_', '');
+      const rec = {
+        token, empId, siteId: site ? site.id : null,
+        createdAt: iso(new Date()), createdBy: actor ? (actor.name || actor.id) : null,
+        expiresAt: iso(new Date(Date.now() + FEEDBACK_TOKEN_TTL_DAYS * 86400000)),
+        used: false,
+      };
+      state.feedbackTokens.push(rec);
+      persist(); emit();
+      return rec;
+    });
+  }
+  const getFeedbackToken = (token) => (state.feedbackTokens || []).find((t) => t.token === token) || null;
+  const getFeedbackTokens = (filter) => (state.feedbackTokens || [])
+    .filter((t) => !filter || !filter.empId || t.empId === filter.empId);
+
+  function maskCustomerName(name) {
+    const n = String(name || '').trim();
+    if (!n) return '';
+    return n.split(/\s+/).map((w) => (w.length <= 1 ? w : w[0] + '*'.repeat(Math.max(1, w.length - 2)) + w[w.length - 1])).join(' ');
+  }
+  function maskCustomerPhone(phone) {
+    const d = String(phone || '').replace(/\D/g, '');
+    return d.length >= 6 ? d.slice(0, 4) + 'XX' + d.slice(-2) : (d ? 'XXXXXX' : '');
+  }
+  /* The public submission path — no permission gate, since this is a customer
+     acting through a token, not an internal user with a role at all. Every
+     other check (token validity, single-use, expiry) still applies. */
+  function submitFeedback(token, payload) {
+    const t = getFeedbackToken(token);
+    if (!t) return { error: 'This feedback link is invalid.' };
+    if (t.used) return { error: 'This feedback link has already been used.' };
+    if (new Date(t.expiresAt) < new Date()) return { error: 'This feedback link has expired.' };
+    const emp = getEmployee(t.empId); if (!emp) return { error: 'Technician not found.' };
+    const rating = +payload.rating;
+    if (!(rating >= 1 && rating <= 5)) return { error: 'Please select a rating from 1 to 5.' };
+    if (!state.feedback) state.feedback = [];
+    const fb = {
+      id: uid('fb'), empId: t.empId, siteId: t.siteId, submittedAt: iso(new Date()),
+      channel: 'token', token,
+      rating, badge: payload.badge || null, comment: String(payload.comment || '').trim().slice(0, 600),
+      customer: { nameMasked: maskCustomerName(payload.customerName), phoneMasked: payload.customerPhone ? maskCustomerPhone(payload.customerPhone) : '' },
+      status: 'pending', moderatedBy: null, moderatedAt: null,
+      linkedToIncentive: false,
+    };
+    state.feedback.push(fb);
+    t.used = true; t.usedAt = iso(new Date());
+    state.notifications.push({ id: uid('ntf'), employeeId: t.empId, type: 'feedback',
+      message: `New customer feedback received (${rating}★, pending moderation).`, read: false, timestamp: iso(new Date()) });
+    persist(); emit();
+    return fb;
+  }
+  function getFeedback(filter) {
+    let list = state.feedback || [];
+    if (filter && filter.empId) list = list.filter((f) => f.empId === filter.empId);
+    if (filter && filter.status) list = list.filter((f) => f.status === filter.status);
+    return list.slice().sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
+  }
+  /* Moderation decides visibility only — it never sets `linkedToIncentive`.
+     That stays a distinct, explicit action so unmoderated (or even approved)
+     feedback can never silently move pay. */
+  function moderateFeedback(id, decision, actor) {
+    return guarded(actor, 'feedback.moderate', () => {
+      const f = (state.feedback || []).find((x) => x.id === id); if (!f) return { error: 'Feedback not found.' };
+      f.status = decision; f.moderatedBy = actor ? (actor.name || actor.id) : null; f.moderatedAt = iso(new Date());
+      persist(); emit();
+      return f;
+    });
+  }
 
   // ---------- employee / site incentives ----------
   function updateEmployeeIncentives(empId, incentives, actor) {
@@ -1503,9 +2035,19 @@
     return days >= 0 && days <= NEW_JOINER_DAYS;
   }
 
-  // Live positions — only employees with a today attendance record carry live GPS
-  // (i.e. those actually clocked in). O(n) via a today index. Keeps the map light.
-  function getLivePositions() {
+  /* Live positions — a clock-in creates an active-shift location, a clock-out
+     removes the person from live tracking (this used to key off "any mark
+     today", so someone who had already clocked out and gone home still
+     showed up as a live pin). Only the LAST mark of the day decides on-shift
+     status: clock-in and nothing after it means still on shift; a clock-out
+     after it means the shift ended.
+
+     Every position here is demo/simulated GPS, never a real provider — every
+     caller gets `simulated: true` back so the UI can never present this as a
+     real location feed. */
+  function getLivePositions(opts) {
+    const includeOffShift = !!(opts && opts.includeOffShift);
+    const staleAfterMinutes = (opts && opts.staleAfterMinutes) || 15;
     const today = dateKey(TODAY);
     const byEmp = {};
     for (const a of state.attendance) {
@@ -1519,7 +2061,15 @@
       const site = getSite(emp.siteId); if (!site) return;
       const marks = byEmp[eid].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
       const last = marks[marks.length - 1];
-      out.push({ emp, site, lat: last.latitude, lng: last.longitude, inside: last.insideGeofence, last });
+      const onShift = last.type === 'clock-in';
+      if (!onShift && !includeOffShift) return;
+      const freshnessMinutes = Math.max(0, Math.round((TODAY - new Date(last.timestamp)) / 60000));
+      out.push({
+        emp, site, lat: last.latitude, lng: last.longitude, inside: last.insideGeofence, last,
+        onShift, freshnessMinutes, stale: onShift && freshnessMinutes > staleAfterMinutes,
+        distance: Math.round(haversine(last.latitude, last.longitude, site.lat, site.lng)),
+        simulated: true,
+      });
     });
     return out;
   }
@@ -1530,7 +2080,7 @@
   window.Store = {
     TODAY,
     // reference data
-    EMPLOYEE_TYPES, DESIGNATION_LADDERS, ALL_DESIGNATIONS, LIFECYCLE_STAGES, REQUIRED_DOC_KEYS, BLANK_ADDRESS,
+    EMPLOYEE_TYPES, EMPLOYMENT_BASIS, DESIGNATION_LADDERS, ALL_DESIGNATIONS, LIFECYCLE_STAGES, REQUIRED_DOC_KEYS, BLANK_ADDRESS,
     REG_TYPES, REG_MONTHLY_LIMIT, BANK_UPDATE_LIMIT, LOCKED_DOC_KEYS, DEFAULT_SHIFT,
     canonicalRole, isAdminRole,
     // selectors
@@ -1549,20 +2099,27 @@
     get state() { return state; },
     // logic
     calcIncentive, computePayslip, runPayroll, countAttendance, checkGeofence, haversine,
+    PAYROLL_STATES, transitionPayroll, isPeriodLocked, getPayrollLockInfo,
     evalIncentiveRules, ruleAmount, RULE_CAP,
     storeTargetIncentive, validateEmail, roleCanSelfApprove,
     // store targets
     getStoreTargets, getStoreTarget, getStoreAchievement, getStoreTargetSummary,
     upsertStoreTarget, deleteStoreTarget,
+    previewStoreTargetUpload, commitStoreTargetUpload, getStoreTargetUploads,
     // policies
-    getPolicies, upsertPolicy, deletePolicy, togglePolicy,
+    getPolicies, getPoliciesForUser, upsertPolicy, deletePolicy, togglePolicy,
+    acknowledgePolicy, isPolicyAcknowledged, getPolicyAcks, getPendingAcknowledgements, getPolicyAckCoverage,
     // mutations
     updateEmployee, addEmployee, approveEmployee, rejectEmployee, addAttendance,
     submitForApproval, setDocumentStatus, updateDesignation, setGeoFence,
+    setEmploymentBasis, setStatutoryConfig,
+    generateOfferLetter, acknowledgeOffer, reviewOffer, regenerateOfferLetter, OFFER_STATES,
     addRegularisation, decideRegularisation, upsertSlab, deleteSlab,
     upsertSlabTemplate, deleteSlabTemplate, assignSiteSlab, assignRegionSlab, assignEmployeeSlab,
-    upsertSite, deleteSite, updateSales, markNotificationRead, markAllRead, updateConfig,
+    upsertSite, deleteSite, setSiteActive, updateSales, markNotificationRead, markAllRead, updateConfig,
     sendKudos, triggerDevMode, clearDevMode,
+    reportPayslipIssue, getPayslipQueries,
+    generateFeedbackToken, getFeedbackToken, getFeedbackTokens, submitFeedback, getFeedback, moderateFeedback,
     updateEmployeeIncentives, updateSiteIncentives, addIncentiveUpload,
     getIncentiveAudit,
     // meta

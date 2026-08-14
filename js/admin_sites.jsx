@@ -465,6 +465,224 @@ function StoreTargetsTab({ user }) {
   );
 }
 
+/* ============================================================================
+   Store Target bulk upload — CSV columns: Store Code, Target Amount, Period
+   (YYYY-MM), optional Incentive %. Same preview-then-confirm shape as the
+   incentive bulk upload: parsing never writes anything, valid/invalid/
+   duplicate/locked rows are all shown before a single explicit commit, and
+   every commit leaves a real upload record.
+   ========================================================================== */
+function StoreTargetBulkUploadTab({ user }) {
+  const store = useStore();
+  const toast = useToast();
+  const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const fileInputRef = useRef(null);
+  const uploads = store.getStoreTargetUploads();
+
+  const downloadSample = () => downloadCSV('store_target_upload_sample.csv', [
+    ['Store Code', 'Target Amount', 'Period', 'Incentive %'],
+    ['DMUM', '250000', '2026-08', '5'],
+    ['DDEL', '180000', '2026-08', '4'],
+    ['DBLR', '150000', '2026-08', '6'],
+  ]);
+
+  const parseCSV = (text, fileName) => {
+    const lines = text.trim().split(/\r?\n/);
+    if (lines.length < 2) { toast('File is empty or has no data rows', 'error'); return; }
+    const header = lines[0].split(',').map((h) => h.trim().toLowerCase());
+    const codeCol = header.findIndex((h) => h.includes('store code') || h === 'code');
+    const amountCol = header.findIndex((h) => h.includes('target amount') || h.includes('amount'));
+    const periodCol = header.findIndex((h) => h.includes('period') || h.includes('effective'));
+    const pctCol = header.findIndex((h) => h.includes('incentive'));
+    if (codeCol < 0 || amountCol < 0 || periodCol < 0) {
+      toast('Invalid CSV format — required columns: Store Code, Target Amount, Period', 'error');
+      return;
+    }
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',').map((c) => c.trim());
+      if (cols.every((c) => !c)) continue;
+      rows.push({ storeCode: cols[codeCol], amount: cols[amountCol], period: cols[periodCol], incentivePct: pctCol >= 0 ? cols[pctCol] : '' });
+    }
+    const result = Store.previewStoreTargetUpload(rows);
+    setPreview({ ...result, fileName });
+  };
+
+  const handleFile = (file) => {
+    if (!file) return;
+    if (!file.name.endsWith('.csv')) { toast('Only CSV files are supported', 'error'); return; }
+    setUploading(true);
+    const reader = new FileReader();
+    reader.onload = (e) => { parseCSV(e.target.result, file.name); setUploading(false); };
+    reader.onerror = () => { toast('Failed to read file', 'error'); setUploading(false); };
+    reader.readAsText(file);
+  };
+
+  const confirmImport = () => {
+    if (!preview || !preview.valid.length) return;
+    const res = Store.commitStoreTargetUpload(preview.valid, user, { fileName: preview.fileName });
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    toast(`Import applied — ${res.count} target${res.count === 1 ? '' : 's'} set${res.failedCount ? `, ${res.failedCount} refused` : ''}`, res.failedCount ? 'warn' : 'success');
+    setPreview(null);
+  };
+
+  if (preview) {
+    const rejected = [...preview.invalid, ...preview.duplicates];
+    return (
+      <Card noBody title={`Review import — ${preview.fileName}`}
+        subtitle={`${preview.valid.length} valid row${preview.valid.length === 1 ? '' : 's'} · ${rejected.length} rejected · nothing is saved until you confirm`}
+        right={<div className="flex gap-2"><Btn size="sm" onClick={() => setPreview(null)}>Cancel</Btn><Btn size="sm" variant="primary" disabled={!preview.valid.length} onClick={confirmImport}><Icon name="check" className="w-3.5 h-3.5"/>Confirm import</Btn></div>}>
+        <div className="p-3 space-y-3">
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1.5">Will be applied ({preview.valid.length})</div>
+            <div className="rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden">
+              <table className="w-full dense-table text-[12px]">
+                <thead><tr><th>Store</th><th>Period</th><th className="text-right">Target</th><th className="text-right">Incentive %</th><th></th></tr></thead>
+                <tbody>
+                  {preview.valid.map((r, i) => (
+                    <tr key={i}>
+                      <td>{r.storeName} <span className="font-mono text-slate-400">({r.storeCode})</span></td>
+                      <td className="font-mono">{r.period}</td>
+                      <td className="text-right font-mono">{fmtINR(r.amount)}</td>
+                      <td className="text-right font-mono">{r.incentivePct}%</td>
+                      <td>{r.replaces && <Badge tone="amber">Replaces existing</Badge>}</td>
+                    </tr>
+                  ))}
+                  {preview.valid.length === 0 && <tr><td colSpan={5}><Empty title="No valid rows to apply"/></td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {rejected.length > 0 && (
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wide text-rose-500 mb-1.5">Rejected ({rejected.length})</div>
+              <div className="rounded-lg border border-rose-200 dark:border-rose-900 overflow-hidden max-h-48 overflow-y-auto">
+                <table className="w-full dense-table text-[12px]">
+                  <thead><tr><th>Row</th><th>Store Code</th><th>Reason</th></tr></thead>
+                  <tbody>
+                    {rejected.map((e, i) => (
+                      <tr key={i}><td className="font-mono">{e.row}</td><td className="font-mono text-slate-500">{e.storeCode || '—'}</td><td className="text-rose-600 dark:text-rose-400">{e.reason}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-12 gap-4">
+        <div className="col-span-12 lg:col-span-7">
+          <Card title="Upload Store Targets" subtitle="Bulk-set sales targets across stores from a CSV file">
+            <div className="space-y-4">
+              <div className="rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden">
+                <div className="px-3 py-2 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800">
+                  <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Required CSV Columns</div>
+                </div>
+                <div className="p-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
+                    {['Store Code', 'Target Amount', 'Period', 'Incentive %'].map((col) => (
+                      <div key={col} className="text-[11px] font-semibold text-brand-700 dark:text-brand-300 bg-brand-50 dark:bg-brand-900/20 rounded px-2 py-1 text-center">{col}</div>
+                    ))}
+                  </div>
+                  <div className="mt-2 text-[11px] text-slate-500 space-y-1">
+                    <div><span className="font-semibold">Store Code</span> is the stable key — matched exactly, never by name. <span className="font-semibold">Period</span> is YYYY-MM. <span className="font-semibold">Incentive %</span> is optional — keeps the store's existing rate (default 5%) if left blank.</div>
+                    <div>One row per store/period. A row for a store/period that already has a target replaces it; a locked payroll period is rejected.</div>
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800">
+                <Icon name="file" className="w-5 h-5 text-emerald-600 shrink-0"/>
+                <div className="flex-1">
+                  <div className="text-[12px] font-semibold text-emerald-900 dark:text-emerald-100">Download Sample Template</div>
+                  <div className="text-[11px] text-emerald-700 dark:text-emerald-300">Pre-filled with example data to guide your upload</div>
+                </div>
+                <Btn size="sm" onClick={downloadSample}><Icon name="download" className="w-3.5 h-3.5"/>Sample CSV</Btn>
+              </div>
+              <div
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
+                onClick={() => fileInputRef.current?.click()}
+                className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition ${
+                  dragOver ? 'border-brand-500 bg-brand-50/60 dark:bg-brand-900/20' : 'border-slate-300 dark:border-slate-600 hover:border-brand-400 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                }`}
+              >
+                <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={(e) => { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ''; }}/>
+                {uploading ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <Icon name="refresh" className="w-8 h-8 text-brand-500 animate-spin"/>
+                    <div className="text-[13px] font-semibold text-slate-700 dark:text-slate-200">Processing file…</div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="w-12 h-12 rounded-xl bg-brand-50 dark:bg-brand-900/30 flex items-center justify-center">
+                      <Icon name="file" className="w-6 h-6 text-brand-600"/>
+                    </div>
+                    <div className="text-[13px] font-semibold text-slate-700 dark:text-slate-200">
+                      {dragOver ? 'Drop to upload' : 'Drag & drop CSV here, or click to browse'}
+                    </div>
+                    <div className="text-[11px] text-slate-400">Accepts .csv files only</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </Card>
+        </div>
+        <div className="col-span-12 lg:col-span-5">
+          <Card title="Upload Rules" subtitle="How the bulk upload works">
+            <div className="space-y-3 text-[12px] text-slate-600 dark:text-slate-300">
+              {[
+                ['building', 'Store Code matching', 'Stores are matched by Store Code, never by name — an unrecognised or inactive code is rejected.'],
+                ['eye', 'Preview first', 'Nothing is saved until you review the parsed rows and confirm.'],
+                ['layers', 'Duplicate prevention', 'A Store Code + Period repeated within the same file is rejected as a duplicate, not silently overwritten twice.'],
+                ['lock', 'Locked periods blocked', 'A row for a period whose payroll has already been processed is rejected.'],
+                ['shield', 'Admin only', 'Store targets, like incentives, are Admin-only. HR sees the read-only view.'],
+              ].map(([icon, title, desc]) => (
+                <div key={title} className="flex gap-2.5">
+                  <div className="w-6 h-6 rounded-md bg-brand-50 dark:bg-brand-900/30 flex items-center justify-center shrink-0">
+                    <Icon name={icon} className="w-3.5 h-3.5 text-brand-600"/>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-slate-700 dark:text-slate-200">{title}</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">{desc}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      <Card noBody title="Upload History" subtitle="All previous store target bulk upload records">
+        <div className="overflow-x-auto">
+        <table className="w-full dense-table text-[13px]">
+          <thead><tr><th>File Name</th><th>Uploaded By</th><th>Date &amp; Time</th><th className="text-right">Applied</th><th className="text-right">Failed</th></tr></thead>
+          <tbody>
+            {uploads.map((u) => (
+              <tr key={u.id}>
+                <td><Icon name="file" className="w-3.5 h-3.5 text-slate-400 mr-1.5 inline"/>{u.fileName}</td>
+                <td className="text-[12px] text-slate-600 dark:text-slate-300">{u.uploadedBy}</td>
+                <td className="text-[12px] text-slate-500 font-mono">{fmtDateTime(u.uploadedAt)}</td>
+                <td className="text-right font-mono font-semibold text-emerald-600">{u.count}</td>
+                <td className="text-right font-mono font-semibold text-rose-600">{u.failedCount || 0}</td>
+              </tr>
+            ))}
+            {uploads.length === 0 && <tr><td colSpan={5}><Empty title="No uploads yet"/></td></tr>}
+          </tbody>
+        </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function SitesPage({ user, navArg }) {
   const store = useStore();
   const toast = useToast();
@@ -472,6 +690,8 @@ function SitesPage({ user, navArg }) {
   const [tab, setTab] = useState('stores');
   const [editing, setEditing] = useState(null);
   const [targetFor, setTargetFor] = useState(null); // { site, period }
+  const [deactivating, setDeactivating] = useState(false);
+  const [deactivateReason, setDeactivateReason] = useState('');
   const [q, setQ] = useState('');
   /* A store picked from global search arrives with its name in the filter; a
      sidebar sub-item arrives with the tab it wants opened. */
@@ -484,6 +704,7 @@ function SitesPage({ user, navArg }) {
   const [region, setRegion] = useState('all');
   const [teamLead, setTeamLead] = useState('all');
   const [page, setPage] = useState(0);
+  const [showInactive, setShowInactive] = useState(false);
 
   const sites = store.getSites();
   const hierarchy = store.getHierarchy();
@@ -502,7 +723,9 @@ function SitesPage({ user, navArg }) {
   const teamLeadsInScope = teamLeads.filter((m) =>
     (zone === 'all' || m.zone === zone) && (region === 'all' || m.region === region));
 
+  const activeCount = sites.filter((s) => s.active !== false).length;
   const filtered = sites.filter((s) => {
+    if (!showInactive && s.active === false) return false;
     if (zone !== 'all' && s.zone !== zone) return false;
     if (region !== 'all' && s.region !== region) return false;
     if (teamLead !== 'all' && s.teamLeadId !== teamLead) return false;
@@ -520,7 +743,18 @@ function SitesPage({ user, navArg }) {
 
   const canEditIncentive = can(user, 'incentive.edit');
   const canEditTarget = can(user, 'target.edit');
-  const save = () => { Store.upsertSite(editing, user); toast('Site saved', 'success'); setEditing(null); };
+  const canEditSite = can(user, 'site.edit');
+  const closeEditor = () => { setEditing(null); setDeactivating(false); setDeactivateReason(''); };
+  const save = () => {
+    const res = Store.upsertSite(editing, user);
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    toast('Site saved', 'success'); closeEditor();
+  };
+  const confirmDeactivate = () => {
+    const res = Store.setSiteActive(editing.id, false, deactivateReason.trim(), user);
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    toast('Store deactivated', 'warn'); closeEditor();
+  };
 
   /* Manager pickers for the edit modal, scoped to the store being edited so the
      lists stay short: Team Leads within the chosen zone/state, Business Managers
@@ -550,19 +784,20 @@ function SitesPage({ user, navArg }) {
   const TABS = [
     { id: 'stores',  label: 'Stores & geo-fences', icon: 'building' },
     { id: 'targets', label: 'Store Targets',       icon: 'target' },
+    ...(canEditTarget ? [{ id: 'targets-bulk', label: 'Bulk upload targets', icon: 'upload' }] : []),
   ];
 
   return (
     <div className="space-y-4">
       <PageHeader eyebrow="Operations" title="Client sites"
-        subtitle={`${sites.length} stores · ${(hierarchy.zones || []).length} zones · ${(hierarchy.regions || []).length} states · ${teamLeads.length} Team Leads · ${(hierarchy.businessManagers || []).length} Business Managers`}>
+        subtitle={`${activeCount} active of ${sites.length} stores · ${(hierarchy.zones || []).length} zones · ${(hierarchy.regions || []).length} states · ${teamLeads.length} Team Leads · ${(hierarchy.businessManagers || []).length} Business Managers`}>
         {tab === 'stores' && <>
           <Btn onClick={() => downloadCSV('stores.csv', [
-            ['Code','Store','City','State','Zone','Store Manager','Team Lead','Business Manager','Slab','Active staff'],
-            ...filtered.map((s) => [s.code, s.name, s.city, s.region, s.zone, (store.getEmployee(s.managerId) || {}).name || '—', s.cm, s.bm, tplById[s.slabId]?.label || '—', staffBySite[s.id] || 0]),
+            ['Code','Store','Status','City','State','Zone','Store Manager','Team Lead','Business Manager','Slab','Active staff'],
+            ...filtered.map((s) => [s.code, s.name, s.active === false ? 'Inactive' : 'Active', s.city, s.region, s.zone, (store.getEmployee(s.managerId) || {}).name || '—', s.cm, s.bm, tplById[s.slabId]?.label || '—', staffBySite[s.id] || 0]),
           ])}><Icon name="download" className="w-3.5 h-3.5"/>Export</Btn>
-          {can(user, 'site.view') && isSuperAdmin(user) && (
-            <Btn variant="primary" onClick={() => setEditing({ id: null, code: '', name: '', type: 'store', lat: 19.108, lng: 72.826, radius: 150, shiftStart: '10:00', shiftEnd: '19:00', city: '', region: '', zone: '', bmId: '', teamLeadId: '', managerId: '', slabId: hierarchy.defaultSlabId, incentives: [] })}>
+          {canEditSite && (
+            <Btn variant="primary" onClick={() => setEditing({ id: null, code: '', name: '', type: 'store', lat: 19.108, lng: 72.826, radius: 150, shiftStart: '10:00', shiftEnd: '19:00', city: '', region: '', zone: '', bmId: '', teamLeadId: '', managerId: '', slabId: hierarchy.defaultSlabId, incentives: [], active: true })}>
               <Icon name="plus" className="w-3.5 h-3.5"/>Add store
             </Btn>
           )}
@@ -572,6 +807,7 @@ function SitesPage({ user, navArg }) {
       <Tabs tabs={TABS} value={tab} onChange={setTab}/>
 
       {tab === 'targets' && <StoreTargetsTab user={user}/>}
+      {tab === 'targets-bulk' && <StoreTargetBulkUploadTab user={user}/>}
 
       {tab === 'stores' && <>
       {/* Zone summary strip */}
@@ -606,7 +842,12 @@ function SitesPage({ user, navArg }) {
             options={[{ value: 'all', label: 'All Team Leads' },
               ...teamLeadsInScope.map((m) => ({ value: m.id, label: m.name, sub: [m.region, `${m.storeCount} stores`].filter(Boolean).join(' · ') }))]}
             searchPlaceholder="Search Team Lead by name…" emptyLabel="No Team Lead matches"/>
+          <label className="flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-600 dark:text-slate-300 cursor-pointer whitespace-nowrap">
+            <input type="checkbox" checked={showInactive} onChange={(e) => { setShowInactive(e.target.checked); setPage(0); }} className="accent-brand-700 w-4 h-4"/>
+            Show inactive ({sites.length - activeCount})
+          </label>
         </div>
+        <div className="overflow-x-auto">
         <table className="w-full dense-table text-[13px]">
           <thead><tr><th>Store</th><th>City</th><th>State / Zone</th><th>Store Manager</th><th>Team Lead</th><th>Business Mgr</th><th>Incentive slab</th><th className="text-right">Staff</th><th></th></tr></thead>
           <tbody>
@@ -615,7 +856,9 @@ function SitesPage({ user, navArg }) {
               return (
               <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                 <td>
-                  <div className="font-semibold text-slate-800 dark:text-slate-100">{s.name}</div>
+                  <div className="font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                    {s.name}{s.active === false && <Badge tone="slate">Inactive</Badge>}
+                  </div>
                   <div className="text-[10px] text-slate-500 font-mono">{s.code} · {s.type === 'store' ? 'Retail' : 'Service'}</div>
                 </td>
                 <td className="text-[12px] text-slate-600 dark:text-slate-300">{s.city}</td>
@@ -632,7 +875,7 @@ function SitesPage({ user, navArg }) {
                 <td>
                   <div className="flex justify-end gap-1">
                     <Btn size="xs" title={canEditTarget ? 'Store target' : 'Store target — Admin only'} disabled={!canEditTarget} onClick={() => setTargetFor({ site: s, period: '2026-07' })}><Icon name="target" className="w-3 h-3"/></Btn>
-                    <Btn size="xs" title="Edit store" onClick={() => setEditing(s)}><Icon name="edit" className="w-3 h-3"/></Btn>
+                    <Btn size="xs" title={canEditSite ? 'Edit store' : 'Edit store — Admin/HR only'} disabled={!canEditSite} onClick={() => setEditing(s)}><Icon name="edit" className="w-3 h-3"/></Btn>
                   </div>
                 </td>
               </tr>
@@ -641,20 +884,55 @@ function SitesPage({ user, navArg }) {
             {shown.length === 0 && <tr><td colSpan={9}><Empty title="No stores match filters"/></td></tr>}
           </tbody>
         </table>
+        </div>
         <Pagination page={page} pages={pages} total={filtered.length} per={PER} onPage={setPage} unit="stores"/>
       </Card>
       </>}
 
       {editing && (
-        <Modal open onClose={() => setEditing(null)} size="xl" icon="building"
+        <Modal open onClose={closeEditor} size="xl" icon="building"
           title={editing.id ? 'Edit store' : 'New client store'} subtitle={editing.id ? `${editing.code} · ${editing.city}` : 'Add a client location and its geo-fence'}
-          footer={<><Btn onClick={() => setEditing(null)}>Cancel</Btn>
-            {editing.id && <Btn variant="danger" onClick={async () => {
-              const ok = await confirm({ title: `Delete ${editing.name}?`, body: 'Staff posted here keep their records but lose their store assignment, and any targets set for this store are removed.', confirmLabel: 'Delete store', destructive: true });
-              if (!ok) return;
-              Store.deleteSite(editing.id); toast('Store removed', 'warn'); setEditing(null);
-            }}>Delete</Btn>}
+          footer={<><Btn onClick={closeEditor}>Cancel</Btn>
+            {editing.id && canEditSite && (editing.active === false ? (
+              <Btn variant="success" onClick={() => {
+                const res = Store.setSiteActive(editing.id, true, '', user);
+                if (res && res.error) { toast(res.error, 'error'); return; }
+                toast('Store reactivated', 'success'); closeEditor();
+              }}><Icon name="check-circle" className="w-3.5 h-3.5"/>Reactivate</Btn>
+            ) : !deactivating && (
+              <Btn variant="danger" onClick={() => setDeactivating(true)}><Icon name="alert" className="w-3.5 h-3.5"/>Deactivate</Btn>
+            ))}
+            {editing.id && isSuperAdmin(user) && (staffBySite[editing.id] || 0) === 0 && (
+              <Btn variant="danger" title="Hard delete — only possible with zero staff posted here" onClick={async () => {
+                const ok = await confirm({ title: `Permanently delete ${editing.name}?`, body: 'This removes the store record outright, including its target history. Prefer Deactivate unless this store was created in error.', confirmLabel: 'Delete permanently', destructive: true });
+                if (!ok) return;
+                const res = Store.deleteSite(editing.id, user);
+                if (res && res.error) { toast(res.error, 'error'); return; }
+                toast('Store removed', 'warn'); closeEditor();
+              }}>Delete permanently</Btn>
+            )}
             <Btn variant="primary" onClick={save}><Icon name="check" className="w-3.5 h-3.5"/>Save store</Btn></>}>
+          {deactivating && (
+            <div className="mb-3 p-3 rounded-lg border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-900/20 space-y-2">
+              <div className="text-[12.5px] font-bold text-rose-800 dark:text-rose-200">Deactivate {editing.name}?</div>
+              <div className="text-[11.5px] text-rose-700 dark:text-rose-300">
+                Removed from active pickers and new assignments; staff already posted here keep their records, and the store's history (targets, attendance) stays intact and reachable via "Show inactive".
+              </div>
+              <Field label="Reason"><Input value={deactivateReason} onChange={(e) => setDeactivateReason(e.target.value)} placeholder="Store closed, lease ended, duplicate record…"/></Field>
+              <div className="flex justify-end gap-2">
+                <Btn size="xs" onClick={() => setDeactivating(false)}>Cancel</Btn>
+                <Btn size="xs" variant="danger" onClick={confirmDeactivate}>Confirm deactivation</Btn>
+              </div>
+            </div>
+          )}
+          {editing.active === false && (editing.deactivationHistory || []).length > 0 && (
+            <div className="mb-3 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-[11.5px] text-slate-600 dark:text-slate-300">
+              <div className="font-bold text-slate-700 dark:text-slate-200 mb-1">Deactivation history</div>
+              {editing.deactivationHistory.slice().reverse().map((h, i) => (
+                <div key={i}>{h.action} · {h.by || 'system'} · {fmtDateTime(h.at)}{h.reason ? ` · "${h.reason}"` : ''}</div>
+              ))}
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="Store code"><Input value={editing.code || ''} onChange={(e) => setEditing({ ...editing, code: e.target.value })} placeholder="A001"/></Field>
             <Field label="Store name"><Input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="Mumbai-Juhu"/></Field>
@@ -794,5 +1072,5 @@ function SiteMapPicker({ lat, lng, radius, onChange }) {
 
 Object.assign(window, {
   SitesPage, SiteMapPicker, IncentiveEditor, incentiveRuleText,
-  StoreTargetModal, StoreTargetPanel, StoreTargetsTab, TARGET_PERIODS,
+  StoreTargetModal, StoreTargetPanel, StoreTargetsTab, StoreTargetBulkUploadTab, TARGET_PERIODS,
 });

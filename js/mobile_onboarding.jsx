@@ -141,8 +141,9 @@ function MobileOnboarding({ reapplyFor, onClose, onSubmitted }) {
     email: reapplyFor ? (reapplyFor.email || '') : '', altPhone: '',
     maritalStatus: 'Single', bloodGroup: '', emergencyName: '', emergencyPhone: '',
     sameAddress: true, currentAddress: '',
-    pan: '', panVerified: false,
-    bankAcct: '', bankAcctConfirm: '', ifsc: '', bankVerified: false,
+    pan: '', panOtp: '', panVerified: false,
+    bankAcct: '', bankAcctConfirm: '', ifsc: '', bankOtp: '', bankVerified: false,
+    employmentBasis: 'contract',
     siteId: reapplyFor ? (reapplyFor.siteId || '') : '',
     documents: reapplyFor && reapplyFor.documents ? { ...reapplyFor.documents } : {},
     declared: false,
@@ -195,6 +196,7 @@ function MobileOnboarding({ reapplyFor, onClose, onSubmitted }) {
 
   const verifyPan = () => {
     if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(d.pan)) { setErr('PAN must look like ABCDE1234F'); return; }
+    if (d.panOtp !== DEMO_OTP) { setErr('Incorrect PAN OTP. For this demo the code is ' + DEMO_OTP + '.'); return; }
     run('pan', 1100, () => { set({ panVerified: true }); toast('PAN verified — name matched with Aadhaar', 'success'); });
   };
 
@@ -202,6 +204,7 @@ function MobileOnboarding({ reapplyFor, onClose, onSubmitted }) {
     if (d.bankAcct.length < 8) { setErr('Enter a valid account number'); return; }
     if (d.bankAcct !== d.bankAcctConfirm) { setErr('Account numbers do not match'); return; }
     if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(d.ifsc)) { setErr('IFSC must look like HDFC0001234'); return; }
+    if (d.bankOtp !== DEMO_OTP) { setErr('Incorrect bank OTP. For this demo the code is ' + DEMO_OTP + '.'); return; }
     run('bank', 1300, () => { set({ bankVerified: true }); toast('Bank account verified via ₹1 penny-drop', 'success'); });
   };
 
@@ -227,6 +230,9 @@ function MobileOnboarding({ reapplyFor, onClose, onSubmitted }) {
       bankAccountMasked: 'XXXX' + d.bankAcct.slice(-4),
       ifsc: d.ifsc, bankName: bankFromIfsc(d.ifsc) || '',
       siteId: d.siteId,
+      employmentBasis: d.employmentBasis,
+      pf: { applicable: d.employmentBasis === 'full-time', uan: '' },
+      tds: { applicable: false },
       permanentAddress: address,
       currentAddress: d.sameAddress ? address : d.currentAddress.trim(),
       altPhone: d.altPhone ? '+91 ' + d.altPhone : '',
@@ -421,6 +427,13 @@ function MobileOnboarding({ reapplyFor, onClose, onSubmitted }) {
                 onChange={(e) => set({ pan: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) })}
                 placeholder="ABCDE1234F" className={mInput + ' tracking-widest font-semibold' + (d.panVerified ? ' opacity-60' : '')}/>
             </MField>
+            {!d.panVerified && (
+              <MField label="OTP sent to your registered mobile" hint={'Demo OTP: ' + DEMO_OTP}>
+                <input type="tel" inputMode="numeric" value={d.panOtp}
+                  onChange={(e) => set({ panOtp: e.target.value.replace(/\D/g, '').slice(0, 6) })}
+                  placeholder="6 digits" className={mInput}/>
+              </MField>
+            )}
             {d.panVerified
               ? <VerifiedBanner text={'PAN verified · name matched with ' + (d.kyc ? d.kyc.name : 'Aadhaar')}/>
               : <StepBtn onClick={verifyPan} busy={busy === 'pan'} label="Verify PAN" busyLabel="Verifying with NSDL…"/>}
@@ -454,6 +467,13 @@ function MobileOnboarding({ reapplyFor, onClose, onSubmitted }) {
                 onChange={(e) => set({ ifsc: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11) })}
                 placeholder="HDFC0001234" className={mInput + ' tracking-widest font-semibold' + (d.bankVerified ? ' opacity-60' : '')}/>
             </MField>
+            {!d.bankVerified && (
+              <MField label="OTP sent to your registered mobile" hint={'Demo OTP: ' + DEMO_OTP}>
+                <input type="tel" inputMode="numeric" value={d.bankOtp}
+                  onChange={(e) => set({ bankOtp: e.target.value.replace(/\D/g, '').slice(0, 6) })}
+                  placeholder="6 digits" className={mInput}/>
+              </MField>
+            )}
             {d.bankVerified
               ? <VerifiedBanner text={'Account verified · XXXX' + d.bankAcct.slice(-4) + (bankName ? ' · ' + bankName : '')}/>
               : <StepBtn onClick={verifyBank} busy={busy === 'bank'} label="Verify bank account" busyLabel="Sending ₹1 penny-drop…"/>}
@@ -470,6 +490,19 @@ function MobileOnboarding({ reapplyFor, onClose, onSubmitted }) {
               </div>
             </div>
             <StorePicker value={d.siteId} onChange={(id) => set({ siteId: id })}/>
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 space-y-2">
+              <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Employment basis</div>
+              <div className="grid grid-cols-2 gap-2">
+                {Store.EMPLOYMENT_BASIS.map((b) => (
+                  <button key={b.id} type="button" onClick={() => set({ employmentBasis: b.id })}
+                    className={`text-left p-2.5 rounded-lg border-2 transition ${d.employmentBasis === b.id
+                      ? 'border-brand-500 bg-brand-50/60 dark:bg-brand-900/20' : 'border-slate-200 dark:border-slate-700'}`}>
+                    <div className="text-[12px] font-bold text-slate-800 dark:text-white">{b.label}</div>
+                  </button>
+                ))}
+              </div>
+              <div className="text-[10px] text-slate-400">HR confirms this and configures PF/TDS during approval.</div>
+            </div>
           </>
         )}
 
@@ -509,6 +542,7 @@ function MobileOnboarding({ reapplyFor, onClose, onSubmitted }) {
                 <KycRow label="Bank" value={'XXXX' + d.bankAcct.slice(-4) + (bankName ? ' · ' + bankName : '')}/>
                 <KycRow label="IFSC" value={d.ifsc}/>
                 <KycRow label="Store" value={d.siteId && store.getSite(d.siteId) ? store.getSite(d.siteId).name : '—'}/>
+                <KycRow label="Employment basis" value={Store.EMPLOYMENT_BASIS.find((b) => b.id === d.employmentBasis)?.label}/>
                 <KycRow label="Emergency contact" value={d.emergencyName + ' · +91 ' + d.emergencyPhone}/>
                 <KycRow label="Documents" value={Object.values(d.documents).filter((x) => x && x.status !== 'missing').length + ' uploaded'}/>
               </div>
