@@ -29,7 +29,7 @@ function tierText(t) {
   return `${fl}+ → ${t.type === 'pct' ? t.value + '% of sales' : fmtINR(t.value) + ' flat'}`;
 }
 
-function SlabTemplateEditor({ tpl, onClose }) {
+function SlabTemplateEditor({ tpl, onClose, user }) {
   const toast = useToast();
   const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(tpl)));
   const setTier = (i, patch) => setDraft((d) => ({ ...d, tiers: d.tiers.map((t, idx) => idx === i ? { ...t, ...patch } : t) }));
@@ -38,7 +38,10 @@ function SlabTemplateEditor({ tpl, onClose }) {
   const save = () => {
     const tiers = (draft.tiers || []).map((t) => ({ from: +t.from || 0, type: t.type, value: +t.value || 0 })).sort((a, b) => a.from - b.from);
     const kind = tiers.length === 0 ? 'none' : (tiers.every((t) => t.type === 'pct') ? 'pct' : tiers.every((t) => t.type === 'flat') ? 'flat' : 'mixed');
-    Store.upsertSlabTemplate({ ...draft, tiers, kind });
+    // The store layer is the real gate — even if this dialog were somehow
+    // reached without incentive.edit, the save is refused here, not just hidden.
+    const res = Store.upsertSlabTemplate({ ...draft, tiers, kind }, user);
+    if (res && res.error) { toast(res.error, 'error'); return; }
     toast('Slab template saved — payroll recomputed live', 'success');
     onClose();
   };
@@ -75,14 +78,15 @@ function SlabTemplateEditor({ tpl, onClose }) {
 }
 
 /* ---- Incentive edit modal for a single employee row ---- */
-function EmpIncentiveEditModal({ emp, month = '2026-07', onClose }) {
+function EmpIncentiveEditModal({ emp, month = '2026-07', onClose, user }) {
   const store = useStore();
   const toast = useToast();
   const [incentives, setIncentives] = useState(() => (emp.incentives || []).map((r) => ({ ...r, id: r.id || 'inc_' + Math.random().toString(36).slice(2, 8) })));
   const sales = store.getSales(emp.id, month)?.totalSales || 0;
   const target = store.storeTargetIncentive(emp, month);
   const save = () => {
-    Store.updateEmployeeIncentives(emp.id, incentives);
+    const res = Store.updateEmployeeIncentives(emp.id, incentives, user);
+    if (res && res.error) { toast(res.error, 'error'); return; }
     toast('Incentives saved for ' + emp.name, 'success');
     onClose();
   };
@@ -164,7 +168,11 @@ function IncentiveConfigPanel({ user }) {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
 
-  const canUpload = ['admin', 'hr-manager'].includes(roleOf(user));
+  // Routed through the central matrix, not an inline role list — this used to
+  // bypass PERMISSIONS entirely, which was the one place the old HR
+  // incentive.edit grant could still be exercised even after other buttons
+  // were hidden.
+  const canUpload = can(user, 'incentive.edit');
 
   const emps = store.getEmployees({ status: 'active' });
   const sites = store.getSites();
@@ -268,9 +276,9 @@ function IncentiveConfigPanel({ user }) {
       success++;
     }
 
-    // Apply
+    // Apply — guarded per-employee at the store layer, same as a manual edit.
     Object.values(byEmp).forEach(({ emp, incentives }) => {
-      Store.updateEmployeeIncentives(emp.id, incentives);
+      Store.updateEmployeeIncentives(emp.id, incentives, user);
     });
 
     Store.addIncentiveUpload({
@@ -492,7 +500,7 @@ function IncentiveConfigPanel({ user }) {
                     ['trending-up', 'Multiple incentives', 'A single employee can appear in multiple rows — each row adds one incentive rule.'],
                     ['target', 'Independent thresholds', 'Every rule that clears its Minimum Sales pays out, and the amounts add up. Rules do not override one another.'],
                     ['refresh', 'Full replace', 'Uploading for an employee replaces all their existing incentive definitions.'],
-                    ['shield', 'Admin only', 'Only Admin and HR can perform bulk uploads.'],
+                    ['shield', 'Admin only', 'Incentive rules, slabs, targets and bulk uploads are Admin-only. HR sees a read-only calculation breakdown.'],
                   ].map(([icon, title, desc]) => (
                     <div key={title} className="flex gap-2.5">
                       <div className="w-6 h-6 rounded-md bg-brand-50 dark:bg-brand-900/30 flex items-center justify-center shrink-0">
@@ -603,7 +611,9 @@ function IncentiveConfigPanel({ user }) {
                           <Btn size="xs" variant="danger" onClick={async () => {
                             const ok = await confirm({ title: 'Delete this slab template?', body: 'Stores using it fall back to the company default bands.', confirmLabel: 'Delete template', destructive: true });
                             if (!ok) return;
-                            Store.deleteSlabTemplate(t.id); toast('Template deleted', 'warn');
+                            const res = Store.deleteSlabTemplate(t.id, user);
+                            if (res && res.error) { toast(res.error, 'error'); return; }
+                            toast('Template deleted', 'warn');
                           }}><Icon name="trash" className="w-3 h-3"/></Btn>
                         </div>
                       </td>
@@ -619,8 +629,8 @@ function IncentiveConfigPanel({ user }) {
       </div>
 
       {/* Modals */}
-      {editEmp && <EmpIncentiveEditModal emp={editEmp} onClose={() => setEditEmp(null)}/>}
-      {editTpl && <SlabTemplateEditor tpl={editTpl} onClose={() => setEditTpl(null)}/>}
+      {editEmp && <EmpIncentiveEditModal emp={editEmp} onClose={() => setEditEmp(null)} user={user}/>}
+      {editTpl && <SlabTemplateEditor tpl={editTpl} onClose={() => setEditTpl(null)} user={user}/>}
       {viewError && <UploadErrorModal upload={viewError} onClose={() => setViewError(null)}/>}
       {ConfirmUI}
     </div>

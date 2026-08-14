@@ -37,6 +37,24 @@
   const canonicalRole = (role) => LEGACY_ROLE_MAP[role] || role || 'field-employee';
   const isAdminRole = (role) => canonicalRole(role) === 'admin';
 
+  /* ---------- action-layer permission guard ----------
+     The UI hides buttons an actor may not press, but a hidden button is not
+     enforcement — this is the one place every mutation that touches incentive
+     rules, slabs or targets checks the ACTOR (not just what the caller passed
+     in), so the same rule holds from a click, a keyboard shortcut or a direct
+     console call. `can`/`roleOf` live in utils.jsx, which loads after this
+     file; every real call happens after user interaction (i.e. after the
+     whole page has loaded), so the lazy reference below resolves fine — it
+     only needs a defensive fallback for the narrow window before that. */
+  function actorAllowed(actor, action) {
+    if (typeof can !== 'function') return true; // utils.jsx not yet loaded
+    return can(actor, action);
+  }
+  function guarded(actor, action, fn) {
+    if (!actorAllowed(actor, action)) return { error: `Not permitted to ${action}.` };
+    return fn();
+  }
+
   /* ---------- reference data ----------
 
      Two structurally different kinds of staff share one employee record:
@@ -348,6 +366,7 @@
       hierarchy: buildHierarchy(sites, employees),
       payrolls: [],
       incentiveUploads: [],
+      incentiveAudit: [],
       config: { workingDays: 30, pfPct: 0.12, esicPct: 0.0075, pt: 200, defaultTravelAllowance: 1500 },
     };
   }
@@ -440,6 +459,7 @@
         state.employees = (state.employees || []).map(normaliseEmployee);
         state.storeTargets = state.storeTargets || [];
         state.policies = state.policies || [];
+        state.incentiveAudit = state.incentiveAudit || [];
         buildIndexes();
         return;
       }
@@ -1004,23 +1024,33 @@
   }
 
   /* ---------- store targets ---------- */
-  function upsertStoreTarget(target) {
-    if (!state.storeTargets) state.storeTargets = [];
-    const next = {
-      ...target,
-      amount: +target.amount || 0,
-      incentivePct: +target.incentivePct || 0,
-    };
-    const i = state.storeTargets.findIndex((t) => next.id
-      ? t.id === next.id
-      : (t.siteId === next.siteId && t.period === next.period));
-    if (i >= 0) state.storeTargets[i] = { ...state.storeTargets[i], ...next };
-    else state.storeTargets.push({ ...next, id: next.id || uid('tgt') });
-    achieveCache = {}; persist(); emit();
+  function upsertStoreTarget(target, actor) {
+    return guarded(actor, 'target.edit', () => {
+      if (!state.storeTargets) state.storeTargets = [];
+      const before = target.id ? (state.storeTargets.find((t) => t.id === target.id) || null) : null;
+      const next = {
+        ...target,
+        amount: +target.amount || 0,
+        incentivePct: +target.incentivePct || 0,
+      };
+      const i = state.storeTargets.findIndex((t) => next.id
+        ? t.id === next.id
+        : (t.siteId === next.siteId && t.period === next.period));
+      let saved;
+      if (i >= 0) { state.storeTargets[i] = { ...state.storeTargets[i], ...next }; saved = state.storeTargets[i]; }
+      else { saved = { ...next, id: next.id || uid('tgt') }; state.storeTargets.push(saved); }
+      logIncentiveAudit({ actor, action: before ? 'target.updated' : 'target.created', targetType: 'target', targetId: saved.id, before, after: saved });
+      achieveCache = {}; persist(); emit();
+      return saved;
+    });
   }
-  function deleteStoreTarget(id) {
-    state.storeTargets = (state.storeTargets || []).filter((t) => t.id !== id);
-    achieveCache = {}; persist(); emit();
+  function deleteStoreTarget(id, actor) {
+    return guarded(actor, 'target.edit', () => {
+      const before = (state.storeTargets || []).find((t) => t.id === id) || null;
+      state.storeTargets = (state.storeTargets || []).filter((t) => t.id !== id);
+      if (before) logIncentiveAudit({ actor, action: 'target.deleted', targetType: 'target', targetId: id, before, after: null });
+      achieveCache = {}; persist(); emit();
+    });
   }
   /* Everything a target card needs: the target, what the store actually did, and
      what that means in rupees for the staff posted there. */
@@ -1240,34 +1270,67 @@
     persist(); emit();
   }
   // legacy global slab CRUD (kept)
-  function upsertSlab(slab) {
-    if (slab.id) { const i = state.slabs.findIndex((s) => s.id === slab.id); if (i >= 0) state.slabs[i] = slab; }
-    else state.slabs.push({ ...slab, id: uid('slab') });
-    persist(); emit();
+  function upsertSlab(slab, actor) {
+    return guarded(actor, 'incentive.edit', () => {
+      const before = slab.id ? (state.slabs.find((s) => s.id === slab.id) || null) : null;
+      if (slab.id) { const i = state.slabs.findIndex((s) => s.id === slab.id); if (i >= 0) state.slabs[i] = slab; }
+      else state.slabs.push({ ...slab, id: uid('slab') });
+      logIncentiveAudit({ actor, action: before ? 'slab.updated' : 'slab.created', targetType: 'slab', targetId: slab.id, before, after: slab });
+      persist(); emit();
+    });
   }
-  function deleteSlab(id) { state.slabs = state.slabs.filter((s) => s.id !== id); persist(); emit(); }
+  function deleteSlab(id, actor) {
+    return guarded(actor, 'incentive.edit', () => {
+      state.slabs = state.slabs.filter((s) => s.id !== id);
+      persist(); emit();
+    });
+  }
 
   // store-specific slab template CRUD + assignment
-  function upsertSlabTemplate(tpl) {
-    if (tpl.id && state.slabTemplates.some((t) => t.id === tpl.id)) {
-      const i = state.slabTemplates.findIndex((t) => t.id === tpl.id);
-      state.slabTemplates[i] = { ...state.slabTemplates[i], ...tpl };
-    } else {
-      state.slabTemplates.push({ ...tpl, id: tpl.id || uid('tpl') });
-    }
-    persist(); emit();
+  function upsertSlabTemplate(tpl, actor) {
+    return guarded(actor, 'incentive.edit', () => {
+      const before = tpl.id ? (state.slabTemplates.find((t) => t.id === tpl.id) || null) : null;
+      let saved;
+      if (tpl.id && state.slabTemplates.some((t) => t.id === tpl.id)) {
+        const i = state.slabTemplates.findIndex((t) => t.id === tpl.id);
+        state.slabTemplates[i] = { ...state.slabTemplates[i], ...tpl };
+        saved = state.slabTemplates[i];
+      } else {
+        saved = { ...tpl, id: tpl.id || uid('tpl') };
+        state.slabTemplates.push(saved);
+      }
+      logIncentiveAudit({ actor, action: before ? 'template.updated' : 'template.created', targetType: 'slab', targetId: saved.id, before, after: saved });
+      persist(); emit();
+      return saved;
+    });
   }
-  function deleteSlabTemplate(id) {
-    state.slabTemplates = state.slabTemplates.filter((t) => t.id !== id);
-    state.sites.forEach((s) => { if (s.slabId === id) s.slabId = state.hierarchy.defaultSlabId; });
-    state.employees.forEach((e) => { if (e.slabId === id) e.slabId = null; });
-    persist(); emit();
+  function deleteSlabTemplate(id, actor) {
+    return guarded(actor, 'incentive.edit', () => {
+      state.slabTemplates = state.slabTemplates.filter((t) => t.id !== id);
+      state.sites.forEach((s) => { if (s.slabId === id) s.slabId = state.hierarchy.defaultSlabId; });
+      state.employees.forEach((e) => { if (e.slabId === id) e.slabId = null; });
+      persist(); emit();
+    });
   }
-  function assignSiteSlab(siteId, tplId) { const s = getSite(siteId); if (s) { s.slabId = tplId; persist(); emit(); } }
-  function assignRegionSlab(region, tplId) { state.sites.forEach((s) => { if (s.region === region) s.slabId = tplId; }); persist(); emit(); }
-  function assignEmployeeSlab(empId, tplId) { const e = getEmployee(empId); if (e) { e.slabId = tplId || null; persist(); emit(); } }
+  function assignSiteSlab(siteId, tplId, actor) {
+    return guarded(actor, 'incentive.edit', () => {
+      const s = getSite(siteId); if (s) { const before = s.slabId; s.slabId = tplId; logIncentiveAudit({ actor, action: 'slab.assigned', targetType: 'slab', targetId: siteId, before, after: tplId }); persist(); emit(); }
+    });
+  }
+  function assignRegionSlab(region, tplId, actor) {
+    return guarded(actor, 'incentive.edit', () => {
+      state.sites.forEach((s) => { if (s.region === region) s.slabId = tplId; });
+      logIncentiveAudit({ actor, action: 'slab.assigned', targetType: 'slab', targetId: region, before: null, after: tplId });
+      persist(); emit();
+    });
+  }
+  function assignEmployeeSlab(empId, tplId, actor) {
+    return guarded(actor, 'incentive.edit', () => {
+      const e = getEmployee(empId); if (e) { const before = e.slabId; e.slabId = tplId || null; logIncentiveAudit({ actor, action: 'slab.assigned', targetType: 'slab', targetId: empId, before, after: e.slabId }); persist(); emit(); }
+    });
+  }
 
-  function upsertSite(site) {
+  function upsertSite(site, actor) {
     // Manager ids are the source of truth; keep the legacy name fields in step so
     // the store table, search and CSV export keep showing readable names.
     const tl = getTeamLead(site.teamLeadId);
@@ -1275,7 +1338,19 @@
     const next = { ...site, cm: tl ? tl.name : (site.teamLeadId ? site.cm : ''), bm: bm ? bm.name : (site.bmId ? site.bm : '') };
     if (next.managerId) { const e = getEmployee(next.managerId); if (e) e.isStoreManager = true; }
 
-    if (next.id && state.sites.some((s) => s.id === next.id)) { const i = state.sites.findIndex((s) => s.id === next.id); state.sites[i] = next; }
+    /* Incentive slab assignment rides along on the same form as the rest of the
+       store record, but it is still an incentive edit — an actor without
+       `incentive.edit` (HR, Team Lead) cannot change it here either, even
+       though they may be allowed to save the store's other fields. Rather than
+       reject the whole save, silently hold the incentive-affecting fields at
+       their previous value so the rest of the edit still goes through. */
+    const existing = next.id ? state.sites.find((s) => s.id === next.id) : null;
+    if (!actorAllowed(actor, 'incentive.edit')) {
+      next.slabId = existing ? existing.slabId : next.slabId;
+      next.incentives = existing ? existing.incentives : next.incentives;
+    }
+
+    if (existing) { const i = state.sites.findIndex((s) => s.id === next.id); state.sites[i] = next; }
     else state.sites.push({ ...next, id: next.id || uid('site') });
     invalidate(); persist(); emit();
   }
@@ -1291,18 +1366,47 @@
   function markAllRead(empId) { state.notifications.filter((n) => n.employeeId === empId).forEach((n) => (n.read = true)); persist(); emit(); }
 
   // ---------- employee / site incentives ----------
-  function updateEmployeeIncentives(empId, incentives) {
-    const e = getEmployee(empId); if (!e) return;
-    e.incentives = incentives || [];
-    persist(); emit();
+  function updateEmployeeIncentives(empId, incentives, actor) {
+    return guarded(actor, 'incentive.edit', () => {
+      const e = getEmployee(empId); if (!e) return { error: 'Employee not found.' };
+      const before = e.incentives || [];
+      e.incentives = incentives || [];
+      logIncentiveAudit({ actor, action: 'rule.updated', targetType: 'rule', targetId: empId, before, after: e.incentives });
+      persist(); emit();
+    });
   }
-  function updateSiteIncentives(siteId, incentives) {
-    const s = getSite(siteId); if (!s) return;
-    s.incentives = incentives || [];
-    invalidate(); persist(); emit();
+  function updateSiteIncentives(siteId, incentives, actor) {
+    return guarded(actor, 'incentive.edit', () => {
+      const s = getSite(siteId); if (!s) return { error: 'Store not found.' };
+      const before = s.incentives || [];
+      s.incentives = incentives || [];
+      logIncentiveAudit({ actor, action: 'rule.updated', targetType: 'rule', targetId: siteId, before, after: s.incentives });
+      invalidate(); persist(); emit();
+    });
   }
   const getEmployeeIncentives = (empId) => (getEmployee(empId)?.incentives || []);
   const getSiteIncentives = (siteId) => (getSite(siteId)?.incentives || []);
+
+  // ---------- incentive change audit trail ----------
+  // Every slab/rule/target mutation above logs here, so the calculation drawer
+  // can show real "who changed what, when" history rather than a raw diff.
+  function logIncentiveAudit(entry) {
+    if (!state.incentiveAudit) state.incentiveAudit = [];
+    state.incentiveAudit.unshift({
+      id: uid('iaud'), at: iso(new Date()),
+      by: entry.actor ? (entry.actor.name || entry.actor.id) : 'system',
+      byId: entry.actor ? entry.actor.id : null,
+      action: entry.action, targetType: entry.targetType, targetId: entry.targetId,
+      before: entry.before, after: entry.after,
+    });
+    // persisted alongside the mutation's own persist() call, not here — avoids a double write
+  }
+  function getIncentiveAudit(filter) {
+    let list = state.incentiveAudit || [];
+    if (filter?.empId) list = list.filter((a) => a.targetId === filter.empId);
+    if (filter?.siteId) list = list.filter((a) => a.targetId === filter.siteId);
+    return list;
+  }
 
   // ---------- incentive bulk upload history ----------
   function addIncentiveUpload(upload) {
@@ -1460,6 +1564,7 @@
     upsertSite, deleteSite, updateSales, markNotificationRead, markAllRead, updateConfig,
     sendKudos, triggerDevMode, clearDevMode,
     updateEmployeeIncentives, updateSiteIncentives, addIncentiveUpload,
+    getIncentiveAudit,
     // meta
     subscribe, reset,
   };

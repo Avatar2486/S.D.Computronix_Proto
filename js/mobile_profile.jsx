@@ -94,7 +94,7 @@ function MobilePoliciesSheet({ onClose }) {
   );
 }
 
-function MobileProfile({ emp: empProp, onLogout, onTour, onOpenDocs, onOpenPolicies }) {
+function MobileProfile({ emp: empProp, onLogout, onTour, onOpenDocs, onOpenPolicies, restricted = false }) {
   const store = useStore();
   /* Read the live record so document uploads reflect immediately. */
   const emp = store.getEmployee(empProp.id) || empProp;
@@ -120,10 +120,19 @@ function MobileProfile({ emp: empProp, onLogout, onTour, onOpenDocs, onOpenPolic
         </div>
       </div>
 
-      {/* Incentive tracker — store-specific slab */}
+      {/* Incentive tracker — store-specific slab. A Team Lead never sees an
+          individual pay figure, not even their own (spec: "View incentives —
+          Team performance only, never individual pay"), so this card is
+          skipped entirely for that role rather than shown with a ₹0. */}
+      {!restricted && (
       <div className="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-3">
         <div className="flex items-center justify-between mb-1">
-          <div className="text-[10px] uppercase font-bold tracking-wide text-slate-500">Store incentive slab · July</div>
+          {/* The title names whichever branch actually won — this used to say
+              "Store incentive slab" unconditionally, which was wrong whenever
+              the store-target branch (not the slab) was the higher figure. */}
+          <div className="text-[10px] uppercase font-bold tracking-wide text-slate-500">
+            {detail.winner === 'target' ? 'Store target incentive · July' : 'Store incentive slab · July'}
+          </div>
           <div className="text-[13px] font-bold text-emerald-700 dark:text-emerald-400">{fmtINR(detail.payout)}</div>
         </div>
         <div className="text-[10px] text-slate-500 mb-2">{site?.name} · <span className="font-semibold text-slate-600 dark:text-slate-300">{detail.raw || detail.label}</span></div>
@@ -177,17 +186,21 @@ function MobileProfile({ emp: empProp, onLogout, onTour, onOpenDocs, onOpenPolic
           ))}
         </div>
       </div>
+      )}
 
-      {/* Info list */}
+      {/* Info list — a Team Lead's own KYC (Aadhaar/PAN/bank) is excluded here
+          too, per the same "no individual pay/KYC information" rule. */}
       <div className="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
         {[
           ['Phone', emp.phone, 'phone'],
           ['Email', emp.email, 'mail'],
           ['Assigned site', site?.name, 'building'],
           ['Shift', `${site?.shiftStart} – ${site?.shiftEnd}`, 'clock'],
-          ['Aadhaar', emp.aadhaarMasked, 'shield'],
-          ['PAN', emp.panMasked, 'file'],
-          ['Bank', emp.bankVerified ? 'Verified ✓ via penny-drop' : '—', 'wallet'],
+          ...(restricted ? [] : [
+            ['Aadhaar', emp.aadhaarMasked, 'shield'],
+            ['PAN', emp.panMasked, 'file'],
+            ['Bank', emp.bankVerified ? 'Verified ✓ via penny-drop' : '—', 'wallet'],
+          ]),
           ['Joined', fmtDate(emp.joiningDate, { year: true }), 'calendar'],
         ].map(([k, v, i]) => (
           <div key={k} className="p-3 flex items-center gap-2.5">
@@ -200,7 +213,10 @@ function MobileProfile({ emp: empProp, onLogout, onTour, onOpenDocs, onOpenPolic
         ))}
       </div>
 
-      {/* Onboarding documents — tap through to sample previews + upload */}
+      {/* Onboarding documents — tap through to sample previews + upload.
+          Skipped for a Team Lead: these are government-ID documents, and the
+          rule barring individual KYC applies to that role's own file too. */}
+      {!restricted && (
       <div className="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-3">
         <div className="flex items-center justify-between mb-2">
           <div className="text-[10px] uppercase font-bold tracking-wide text-slate-500">Onboarding documents</div>
@@ -230,6 +246,7 @@ function MobileProfile({ emp: empProp, onLogout, onTour, onOpenDocs, onOpenPolic
           <Icon name="upload" className="w-3.5 h-3.5"/>Manage documents &amp; view samples
         </button>
       </div>
+      )}
 
       {/* Company policies — the same library HR maintains, read-only here */}
       <button onClick={() => onOpenPolicies && onOpenPolicies()}

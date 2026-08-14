@@ -22,7 +22,7 @@ function incentiveRuleText(row) {
 /* `sales` is the figure the rule will actually be applied to (the employee's or
    store's sales for the period). Passing it turns every row into a live rupee
    readout, so nobody has to work out what "10%" is worth. */
-function IncentiveEditor({ incentives, onChange, sales }) {
+function IncentiveEditor({ incentives, onChange, sales, readOnly = false }) {
   const rows = incentives || [];
   const addRow = () => onChange([...rows, { id: 'inc_' + Math.random().toString(36).slice(2, 8), minSales: '', type: 'pct', value: '' }]);
   const updateRow = (id, patch) => onChange(rows.map((r) => r.id === id ? { ...r, ...patch } : r));
@@ -52,17 +52,17 @@ function IncentiveEditor({ incentives, onChange, sales }) {
                 <div className="relative">
                   <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] font-semibold text-slate-400 select-none">₹</span>
                   <input
-                    type="number" min="0" step="1000"
+                    type="number" min="0" step="1000" disabled={readOnly}
                     value={row.minSales == null ? '' : row.minSales}
                     onChange={(e) => updateRow(row.id, { minSales: e.target.value })}
-                    className="w-full h-8 pl-6 pr-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[12px] text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-brand-500/30"
+                    className="w-full h-8 pl-6 pr-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[12px] text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-brand-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
                     placeholder="50000"
                   />
                 </div>
                 <select
-                  value={row.type}
+                  value={row.type} disabled={readOnly}
                   onChange={(e) => updateRow(row.id, { type: e.target.value })}
-                  className="h-8 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[12px] text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-brand-500/30"
+                  className="h-8 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[12px] text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-brand-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   <option value="pct">Percentage (%)</option>
                   <option value="flat">Fixed Amount (₹)</option>
@@ -73,11 +73,11 @@ function IncentiveEditor({ incentives, onChange, sales }) {
                   </span>
                   <input
                     type="number"
-                    min="0"
+                    min="0" disabled={readOnly}
                     step={row.type === 'pct' ? '0.1' : '1'}
                     value={row.value}
                     onChange={(e) => updateRow(row.id, { value: e.target.value })}
-                    className="w-full h-8 pl-6 pr-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[12px] text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-brand-500/30"
+                    className="w-full h-8 pl-6 pr-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[12px] text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-brand-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
                     placeholder={row.type === 'pct' ? '10' : '2000'}
                   />
                 </div>
@@ -89,9 +89,11 @@ function IncentiveEditor({ incentives, onChange, sales }) {
                     {hasValue ? fmtINR(amountFor(row)) : '—'}
                   </span>
                 </div>
-                <button onClick={() => removeRow(row.id)} className="w-7 h-7 flex items-center justify-center rounded-md text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 transition justify-self-end">
-                  <Icon name="trash" className="w-3.5 h-3.5"/>
-                </button>
+                {!readOnly && (
+                  <button onClick={() => removeRow(row.id)} className="w-7 h-7 flex items-center justify-center rounded-md text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 transition justify-self-end">
+                    <Icon name="trash" className="w-3.5 h-3.5"/>
+                  </button>
+                )}
               </div>
               <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-1">
                 <Icon name="info" className="w-3 h-3 shrink-0 text-slate-400"/>
@@ -104,13 +106,21 @@ function IncentiveEditor({ incentives, onChange, sales }) {
           );
         })}
         {rows.length === 0 && (
-          <div className="px-3 py-3 text-[11px] text-slate-500 italic">No incentives defined — click "Add Incentive" to begin.</div>
+          <div className="px-3 py-3 text-[11px] text-slate-500 italic">
+            {readOnly ? 'No incentives defined.' : 'No incentives defined — click "Add Incentive" to begin.'}
+          </div>
         )}
       </div>
       <div className="flex items-center justify-between gap-2 mt-2 flex-wrap">
-        <button onClick={addRow} className="flex items-center gap-1.5 text-[11px] font-semibold text-brand-700 dark:text-brand-300 hover:text-brand-800 dark:hover:text-brand-200 transition">
-          <Icon name="plus" className="w-3.5 h-3.5"/>Add Incentive
-        </button>
+        {readOnly ? (
+          <span className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400">
+            <Icon name="lock" className="w-3.5 h-3.5"/>Read-only — Admin only
+          </span>
+        ) : (
+          <button onClick={addRow} className="flex items-center gap-1.5 text-[11px] font-semibold text-brand-700 dark:text-brand-300 hover:text-brand-800 dark:hover:text-brand-200 transition">
+            <Icon name="plus" className="w-3.5 h-3.5"/>Add Incentive
+          </button>
+        )}
         {rows.length > 0 && (
           <span className="text-[11px] text-slate-500">
             Combined rule value: <span className="font-bold text-emerald-700 dark:text-emerald-300">{fmtINR(total)}</span>
@@ -137,7 +147,7 @@ const TARGET_PERIODS = [
   { id: '2026-09', label: 'September 2026' },
 ];
 
-function StoreTargetModal({ site, period, onClose }) {
+function StoreTargetModal({ site, period, onClose, user }) {
   const store = useStore();
   const toast = useToast();
   const { confirm, ConfirmUI } = useConfirm();
@@ -160,14 +170,16 @@ function StoreTargetModal({ site, period, onClose }) {
 
   const save = () => {
     if (!(+draft.amount > 0)) { toast('Enter a target amount greater than zero', 'error'); return; }
-    Store.upsertStoreTarget(draft);
+    const res = Store.upsertStoreTarget(draft, user);
+    if (res && res.error) { toast(res.error, 'error'); return; }
     toast(`Target saved for ${site.name} · ${fmtMonth(draft.period)}`, 'success');
     onClose();
   };
   const remove = async () => {
     const ok = await confirm({ title: 'Delete this target?', body: `${site.name} will have no target for ${fmtMonth(draft.period)}, and the target-based incentive will not apply.`, confirmLabel: 'Delete target', destructive: true });
     if (!ok) return;
-    Store.deleteStoreTarget(draft.id);
+    const res = Store.deleteStoreTarget(draft.id, user);
+    if (res && res.error) { toast(res.error, 'error'); return; }
     toast('Target removed', 'warn');
     onClose();
   };
@@ -272,7 +284,7 @@ function StoreTargetModal({ site, period, onClose }) {
 }
 
 /* Compact target panel embedded in the store edit modal. */
-function StoreTargetPanel({ site, onOpenTarget }) {
+function StoreTargetPanel({ site, onOpenTarget, canEdit = true }) {
   const store = useStore();
   const [period, setPeriod] = useState('2026-07');
   if (!site || !site.id) {
@@ -289,7 +301,8 @@ function StoreTargetPanel({ site, onOpenTarget }) {
         <Select value={period} onChange={(e) => setPeriod(e.target.value)} className="!w-auto">
           {TARGET_PERIODS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
         </Select>
-        <Btn size="sm" variant={s.target ? 'default' : 'primary'} onClick={() => onOpenTarget(period)}>
+        <Btn size="sm" variant={s.target ? 'default' : 'primary'} disabled={!canEdit}
+          title={canEdit ? undefined : 'Admin only'} onClick={() => onOpenTarget(period)}>
           <Icon name={s.target ? 'edit' : 'plus'} className="w-3.5 h-3.5"/>{s.target ? 'Edit target' : 'Add target'}
         </Btn>
       </div>
@@ -447,7 +460,7 @@ function StoreTargetsTab({ user }) {
         <Pagination page={page} pages={pages} total={rows.length} per={PER} onPage={setPage} unit="stores"/>
       </Card>
 
-      {editing && <StoreTargetModal site={editing} period={period} onClose={() => setEditing(null)}/>}
+      {editing && <StoreTargetModal site={editing} period={period} onClose={() => setEditing(null)} user={user}/>}
     </div>
   );
 }
@@ -505,7 +518,9 @@ function SitesPage({ user, navArg }) {
   const shown = filtered.slice(page * PER, page * PER + PER);
   const regionsForZone = (hierarchy.regions || []).filter((r) => zone === 'all' || r.zone === zone);
 
-  const save = () => { Store.upsertSite(editing); toast('Site saved', 'success'); setEditing(null); };
+  const canEditIncentive = can(user, 'incentive.edit');
+  const canEditTarget = can(user, 'target.edit');
+  const save = () => { Store.upsertSite(editing, user); toast('Site saved', 'success'); setEditing(null); };
 
   /* Manager pickers for the edit modal, scoped to the store being edited so the
      lists stay short: Team Leads within the chosen zone/state, Business Managers
@@ -616,7 +631,7 @@ function SitesPage({ user, navArg }) {
                 <td className="text-right"><Badge tone="brand">{staffBySite[s.id] || 0}</Badge></td>
                 <td>
                   <div className="flex justify-end gap-1">
-                    <Btn size="xs" title="Store target" onClick={() => setTargetFor({ site: s, period: '2026-07' })}><Icon name="target" className="w-3 h-3"/></Btn>
+                    <Btn size="xs" title={canEditTarget ? 'Store target' : 'Store target — Admin only'} disabled={!canEditTarget} onClick={() => setTargetFor({ site: s, period: '2026-07' })}><Icon name="target" className="w-3 h-3"/></Btn>
                     <Btn size="xs" title="Edit store" onClick={() => setEditing(s)}><Icon name="edit" className="w-3 h-3"/></Btn>
                   </div>
                 </td>
@@ -683,8 +698,10 @@ function SitesPage({ user, navArg }) {
                 </span>
               </div>
             </div>
-            <Field label="Incentive slab" className="sm:col-span-2">
+            <Field label="Incentive slab" className="sm:col-span-2"
+              hint={!canEditIncentive ? 'Read-only — incentive slab assignment is Admin only.' : undefined}>
               <SearchSelect value={editing.slabId || ''} onChange={(v) => setEditing({ ...editing, slabId: v })}
+                disabled={!canEditIncentive}
                 placeholder="Company default" searchPlaceholder="Search slab…" emptyLabel="No slab matches"
                 options={[{ value: '', label: 'Company default' },
                   ...templates.map((t) => ({ value: t.id, label: t.label, sub: t.raw || '', keywords: t.raw }))]}/>
@@ -705,7 +722,10 @@ function SitesPage({ user, navArg }) {
                 <div className="text-[12px] font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                   <Icon name="trending-up" className="w-3.5 h-3.5 text-brand-600"/>Incentives
                 </div>
-                <div className="text-[10px] text-slate-500 mt-0.5">Store-level incentive definitions applied to staff at this location</div>
+                <div className="text-[10px] text-slate-500 mt-0.5">
+                  Store-level incentive definitions applied to staff at this location
+                  {!canEditIncentive && <span className="text-amber-600 dark:text-amber-400"> · Read-only — Admin only</span>}
+                </div>
               </div>
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-brand-100 dark:bg-brand-900/40 text-brand-700 dark:text-brand-300">
                 {(editing.incentives || []).length} rule{(editing.incentives || []).length !== 1 ? 's' : ''}
@@ -715,6 +735,7 @@ function SitesPage({ user, navArg }) {
               <IncentiveEditor
                 incentives={editing.incentives || []}
                 onChange={(inc) => setEditing({ ...editing, incentives: inc })}
+                readOnly={!canEditIncentive}
               />
             </div>
           </div>
@@ -726,11 +747,14 @@ function SitesPage({ user, navArg }) {
                 <div className="text-[12px] font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                   <Icon name="target" className="w-3.5 h-3.5 text-emerald-600"/>Store target
                 </div>
-                <div className="text-[10px] text-slate-500 mt-0.5">Sales target and applicable incentive % for this location</div>
+                <div className="text-[10px] text-slate-500 mt-0.5">
+                  Sales target and applicable incentive % for this location
+                  {!canEditTarget && <span className="text-amber-600 dark:text-amber-400"> · Read-only — Admin only</span>}
+                </div>
               </div>
               <Badge tone="slate">{store.getStoreTargets(editing.id).length} period{store.getStoreTargets(editing.id).length === 1 ? '' : 's'}</Badge>
             </div>
-            <StoreTargetPanel site={editing} onOpenTarget={(period) => setTargetFor({ site: editing, period })}/>
+            <StoreTargetPanel site={editing} onOpenTarget={(period) => setTargetFor({ site: editing, period })} canEdit={canEditTarget}/>
           </div>
 
           <div className="mt-3 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
@@ -739,7 +763,7 @@ function SitesPage({ user, navArg }) {
         </Modal>
       )}
 
-      {targetFor && <StoreTargetModal site={targetFor.site} period={targetFor.period} onClose={() => setTargetFor(null)}/>}
+      {targetFor && <StoreTargetModal site={targetFor.site} period={targetFor.period} onClose={() => setTargetFor(null)} user={user}/>}
       {ConfirmUI}
     </div>
   );

@@ -170,7 +170,7 @@ function PriorityAlerts({ user, onNavigate, isSiteMgr }) {
 
 function OverviewPage({ user, onNavigate }) {
   const store = useStore();
-  const isSiteMgr = user.role === 'site-manager';
+  const isSiteMgr = roleOf(user) === 'site-manager';
   const emps = store.getEmployees({ status: 'active' }).filter((e) => !isSiteMgr || e.siteId === user.siteId);
   const presentToday = emps.filter((e) => store.isPresentToday(e)).length;
   const absentToday = emps.length - presentToday;

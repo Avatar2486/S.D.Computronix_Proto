@@ -191,6 +191,7 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
   const canSeePay = can(user, 'salary.view');
   const canSetPay = can(user, 'salary.edit');
   const canSeeIncentive = can(user, 'incentive.view');
+  const canEditIncentive = can(user, 'incentive.edit');
   /* The personal file — government ID, education certificates, offer letter.
      HR and Admin only; see the note on `document.view` in PERMISSIONS. */
   const canSeeDocs = can(user, 'document.view');
@@ -575,15 +576,23 @@ function EmployeeDetailModal({ emp: empProp, user, onClose }) {
                 </div>
               </Card>
 
-              {/* Incentive rules for this employee */}
+              {/* Incentive rules for this employee — HR sees this read-only; only
+                  Admin can actually change a rule (incentive.edit). */}
               {!isOffice && canSeeIncentive && (
                 <Card title="Employee incentive rules" bodyClass="p-3"
-                  subtitle="Supplement the store slab · compared against the store target, higher wins"
+                  subtitle={canEditIncentive
+                    ? 'Supplement the store slab · compared against the store target, higher wins'
+                    : 'Read-only — Admin only · supplements the store slab, compared against the store target'}
                   right={<Badge tone="brand">{(emp.incentives || []).length} rule{(emp.incentives || []).length !== 1 ? 's' : ''}</Badge>}>
                   <IncentiveEditor
                     incentives={emp.incentives || []}
                     sales={sales?.totalSales || 0}
-                    onChange={(v) => { Store.updateEmployeeIncentives(emp.id, v); toast('Incentives updated', 'success'); }}
+                    readOnly={!canEditIncentive}
+                    onChange={(v) => {
+                      const res = Store.updateEmployeeIncentives(emp.id, v, user);
+                      if (res && res.error) { toast(res.error, 'error'); return; }
+                      toast('Incentives updated', 'success');
+                    }}
                   />
                 </Card>
               )}

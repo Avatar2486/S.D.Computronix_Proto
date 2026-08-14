@@ -23,12 +23,19 @@ function PhoneApp({ user, onLogout }) {
   const [tab, setTab] = useState('home');
   const store = useStore();
   const isEmp = user.role === 'field-employee';
+  const isTeamLead = roleOf(user) === 'site-manager';
+  /* Team Lead is the other mobile-only seat (isMobileOnlyRole = field-employee
+     OR site-manager). This governs which record the phone opens on — it used
+     to fall through to the hard-coded emp_001 demo employee ("Rahul Verma")
+     for a Team Lead exactly like it did for Admin/HR preview, showing the
+     wrong person's KYC/incentive profile. */
+  const isSelfSession = isMobileOnlyRole(user);
 
   /* The phone keeps its own session, separate from the desktop shell's. It is
      seeded from `user` so the existing entry paths (role picker, split-screen
      demo) still land straight in the app — signing out drops to the in-phone
      login rather than tearing down the whole admin session. */
-  const [phoneUser, setPhoneUser] = useState(() => (isEmp ? user : store.getEmployee('emp_001')));
+  const [phoneUser, setPhoneUser] = useState(() => (isSelfSession ? user : store.getEmployee('emp_001')));
   const [auth, setAuth] = useState(null);   // null | {mode:'onboarding', reapplyFor} | {mode:'status', emp}
 
   const emp = phoneUser ? (store.getEmployee(phoneUser.id) || phoneUser) : null;
@@ -77,12 +84,13 @@ function PhoneApp({ user, onLogout }) {
 
   const view = (() => {
     switch (tab) {
-      case 'home':       return <MobileHome emp={emp} setTab={setTab}/>;
+      case 'home':       return isTeamLead ? <MobileTeamHome user={user} emp={emp} setTab={setTab}/> : <MobileHome emp={emp} setTab={setTab}/>;
       case 'attendance': return <MobileAttendance emp={emp}/>;
+      case 'team':       return <MobileTeamRoster user={user} emp={emp}/>;
       case 'payslips':   return <MobilePayslips emp={emp}/>;
       case 'gigs':       return <MobileGigs emp={emp}/>;
-      case 'profile':    return <MobileProfile emp={emp} onLogout={signOut} onTour={() => setTourOpen(true)} onOpenDocs={() => setDocsOpen(true)} onOpenPolicies={() => setPoliciesOpen(true)}/>;
-      default:           return <MobileHome emp={emp} setTab={setTab}/>;
+      case 'profile':    return <MobileProfile emp={emp} restricted={isTeamLead} onLogout={signOut} onTour={() => setTourOpen(true)} onOpenDocs={() => setDocsOpen(true)} onOpenPolicies={() => setPoliciesOpen(true)}/>;
+      default:           return isTeamLead ? <MobileTeamHome user={user} emp={emp} setTab={setTab}/> : <MobileHome emp={emp} setTab={setTab}/>;
     }
   })();
 
@@ -113,15 +121,23 @@ function PhoneApp({ user, onLogout }) {
         <div key={tab} className="anim-in">{view}</div>
       </div>
 
-      {/* Bottom tab bar */}
+      {/* Bottom tab bar — a Team Lead gets Team instead of Payslips/Gigs: no
+          money screens (spec: salary/payroll = No, even for Team Lead's own
+          pay — see MobileProfile's `restricted` prop), and a scoped roster in
+          their place. */}
       <div className="absolute bottom-0 left-0 right-0 h-16 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-t border-slate-200 dark:border-slate-800 flex items-center justify-around">
-        {[
+        {(isTeamLead ? [
+          { id: 'home',       label: 'Home',       icon: 'home' },
+          { id: 'attendance', label: 'Attendance', icon: 'target' },
+          { id: 'team',       label: 'Team',        icon: 'users' },
+          { id: 'profile',    label: 'Profile',    icon: 'user' },
+        ] : [
           { id: 'home',       label: 'Home',       icon: 'home' },
           { id: 'attendance', label: 'Attendance', icon: 'target' },
           { id: 'payslips',   label: 'Payslips',   icon: 'wallet' },
           { id: 'gigs',       label: 'Gigs',       icon: 'external' },
           { id: 'profile',    label: 'Profile',    icon: 'user' },
-        ].map((t) => (
+        ]).map((t) => (
           <button key={t.id} onClick={() => setTab(t.id)}
             className={`flex flex-col items-center gap-0.5 py-2 flex-1 ${tab === t.id ? 'text-brand-700 dark:text-brand-300' : 'text-slate-400'}`}>
             <Icon name={t.icon} className="w-5 h-5"/>

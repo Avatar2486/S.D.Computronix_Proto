@@ -24,7 +24,7 @@ const INCENTIVE_MONTHS = [
 /* One row = one employee for the selected month, with both branches resolved. */
 function useIncentiveRows(user, month, f) {
   const store = useStore();
-  const isSiteMgr = user.role === 'site-manager';
+  const isSiteMgr = roleOf(user) === 'site-manager';
 
   return useMemo(() => {
     let emps = store.getEmployees({ status: 'active' });
@@ -143,7 +143,15 @@ function IncentiveBreakdownModal({ row, month, onClose }) {
           <Branch title="B · Incentive slab + rules"
             subtitle={row.slabLabel}
             amount={slabBranch} active={winner === 'slab' && slabBranch > 0}>
-            <div className="flex justify-between"><span className="text-slate-500">Slab tier payout</span><span className="font-mono font-semibold">{fmtINR(bd.slab || 0)}</span></div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Slab tier payout <span className="text-[9.5px] text-slate-400">(max tier reached — never summed)</span></span>
+              <span className="font-mono font-semibold">{fmtINR(bd.slab || 0)}</span>
+            </div>
+            {(bd.applied.length > 0 || bd.pending.length > 0) && (
+              <div className="text-[9.5px] uppercase tracking-wide text-slate-400 font-bold pt-1">
+                Threshold rules (additive, independent of slab)
+              </div>
+            )}
             {(bd.applied || []).map((r, i) => (
               <div key={r.id || i} className="flex justify-between">
                 <span className="text-slate-500 truncate pr-2">
@@ -186,6 +194,30 @@ function IncentiveBreakdownModal({ row, month, onClose }) {
             </div>
           </div>
         </div>
+
+        {/* Audit trail — who last touched the rule/slab/target behind this figure */}
+        {(() => {
+          const audit = [
+            ...store.getIncentiveAudit({ empId: emp.id }),
+            ...(site ? store.getIncentiveAudit({ siteId: site.id }) : []),
+          ].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 5);
+          if (!audit.length) return null;
+          return (
+            <Card title="Recent configuration changes" bodyClass="p-0">
+              <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                {audit.map((a) => (
+                  <div key={a.id} className="px-3 py-2 flex items-center justify-between text-[11.5px]">
+                    <div>
+                      <span className="font-semibold text-slate-700 dark:text-slate-200">{a.action.replace(/\./g, ' ')}</span>
+                      <span className="text-slate-400"> · {a.by}</span>
+                    </div>
+                    <span className="font-mono text-slate-400">{fmtDateTime(a.at)}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          );
+        })()}
 
         {/* Slab tier ladder for context */}
         {detail.tiers && detail.tiers.length > 0 && (
@@ -426,7 +458,7 @@ function IncentiveDashboard({ user, month, setMonth }) {
       </Card>
 
       {detail && <IncentiveBreakdownModal row={detail} month={month} onClose={() => setDetail(null)}/>}
-      {editEmp && <EmpIncentiveEditModal emp={editEmp} month={month} onClose={() => setEditEmp(null)}/>}
+      {editEmp && <EmpIncentiveEditModal emp={editEmp} month={month} onClose={() => setEditEmp(null)} user={user}/>}
     </div>
   );
 }

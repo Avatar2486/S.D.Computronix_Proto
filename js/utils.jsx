@@ -197,6 +197,45 @@ function Avatar({ emp, size = 32, className = '' }) {
   );
 }
 
+/* ---------- identity ----------
+   Every screen used to hand-roll "name + code" markup on its own, which meant
+   the secondary code was sometimes there and sometimes silently dropped.
+   These two are now the one way to print a person or a store, anywhere:
+   Employees, Attendance, Payroll, Incentives, Client Sites, Live Map,
+   Reports, mobile — the code stays permanently visible next to the name. */
+function EmployeeIdentity({ emp, size = 'sm', avatar = true, subtitle = 'code', className = '' }) {
+  if (!emp) return <span className="text-slate-400 italic">Unknown employee</span>;
+  const px = size === 'lg' ? 36 : size === 'md' ? 28 : 22;
+  const nameCls = size === 'lg' ? 'text-[14px]' : size === 'md' ? 'text-[13px]' : 'text-[12.5px]';
+  const sub = subtitle === 'designation' ? emp.designation
+    : subtitle === 'site' ? (emp._siteName || '')
+    : subtitle === null ? null
+    : emp.code; // default: employee code
+  return (
+    <div className={`flex items-center gap-2 min-w-0 ${className}`}>
+      {avatar && <Avatar emp={emp} size={px}/>}
+      <div className="min-w-0">
+        <div className={`font-semibold text-slate-800 dark:text-slate-100 truncate ${nameCls}`}>{emp.name || 'Unnamed'}</div>
+        {sub && <div className="text-[10.5px] font-mono text-slate-500 dark:text-slate-400 truncate">{sub}</div>}
+      </div>
+    </div>
+  );
+}
+function StoreIdentity({ site, size = 'sm', showZone = false, className = '' }) {
+  if (!site) return <span className="text-slate-400 italic">Unknown store</span>;
+  const nameCls = size === 'lg' ? 'text-[14px]' : size === 'md' ? 'text-[13px]' : 'text-[12.5px]';
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <div className={`font-semibold text-slate-800 dark:text-slate-100 truncate ${nameCls}`}>
+        {site.name || 'Unnamed store'} <span className="font-mono text-slate-500 dark:text-slate-400 font-normal">({site.code || '—'})</span>
+      </div>
+      {showZone && (site.city || site.zone) && (
+        <div className="text-[10.5px] text-slate-500 dark:text-slate-400 truncate">{[site.city, site.zone].filter(Boolean).join(' · ')}</div>
+      )}
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, tone = 'slate', icon }) {
   const toneMap = {
     slate: 'text-slate-700', brand: 'text-brand-700 dark:text-brand-300',
@@ -753,8 +792,13 @@ const MONEY_ACTIONS = ['salary.view', 'incentive.view', 'payroll.view'];
 
 const PERMISSIONS = {
   'admin':          ['*'],
+  /* HR runs payroll and needs every figure, but incentive rules, slabs and
+     targets are Admin-only — HR gets a read-only calculation breakdown
+     instead of `incentive.edit`/`target.edit`. This was a real bug: HR used
+     to hold both, letting HR open, save and bulk-replace incentive
+     configuration. */
   'hr-manager':     ['employee.view','employee.create','employee.edit','employee.submit','document.view','document.upload','designation.edit','geofence.edit',
-                     'salary.view','attendance.view','attendance.decide','payroll.view','incentive.view','incentive.edit','target.view','target.edit',
+                     'salary.view','attendance.view','attendance.decide','payroll.view','incentive.view','target.view',
                      'site.view','policy.view','policy.edit','report.view','kudos.send'],
   /* Team Lead: read their own technicians, nothing that writes to a personnel
      record, decides a correction, reveals earnings, or opens a personal file.
@@ -780,6 +824,11 @@ const canSeeMoney = (user) => MONEY_ACTIONS.some((a) => can(user, a));
 const isAdmin = (user) => roleOf(user) === 'admin';
 // Kept under the old name so existing call sites keep reading naturally.
 const isSuperAdmin = isAdmin;
+/* Team Lead and Employee are both mobile-only seats — no Web/Split desktop
+   path, no desktop guided tour, no admin-side "switch user" impersonation.
+   One helper so every gate that means "must be forced into the phone frame"
+   reads the same way instead of listing role strings inline. */
+const isMobileOnlyRole = (user) => ['field-employee', 'site-manager'].includes(roleOf(user));
 
 // ---------- confirm dialog ----------
 function useConfirm() {
@@ -921,9 +970,9 @@ function Pagination({ page, pages, total, per, onPage, unit = 'rows' }) {
 // Expose to global scope for other Babel scripts
 Object.assign(window, {
   fmtINR, fmtINRShort, fmtDate, fmtDateTime, fmtTime, fmtMonth, pctOf, useStore, useToast, ToastProvider, ToastCtx,
-  Icon, Btn, Badge, Card, Avatar, StatCard, Modal, Field, Input, Select, SearchSelect, Textarea, Empty,
+  Icon, Btn, Badge, Card, Avatar, EmployeeIdentity, StoreIdentity, StatCard, Modal, Field, Input, Select, SearchSelect, Textarea, Empty,
   Tabs, PageHeader, StatusBadge, STATUS_TONES, FilterBar, FilterChips, PhotoUpload, EmailField,
   IncentiveAmount, ProgressBar, Pagination, TimeInput,
   useLeafletMap, MapUnavailable, hasLeaflet, fmtHHMM, fmtDuration,
-  downloadCSV, ROLE_LABEL, ROLE_SHORT, PERMISSIONS, MONEY_ACTIONS, can, canSeeMoney, roleOf, isAdmin, isSuperAdmin, useConfirm,
+  downloadCSV, ROLE_LABEL, ROLE_SHORT, PERMISSIONS, MONEY_ACTIONS, can, canSeeMoney, roleOf, isAdmin, isSuperAdmin, isMobileOnlyRole, useConfirm,
 });

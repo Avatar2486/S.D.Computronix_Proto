@@ -174,7 +174,7 @@ function ReportFilters({ f, set, reset, activeCount }) {
 function ReportsPage({ user, navArg }) {
   const store = useStore();
   const [tab, setTab] = useState('attendance');
-  const isSiteMgr = user.role === 'site-manager';
+  const isSiteMgr = roleOf(user) === 'site-manager';
   const [f, setF] = useState(REPORT_BLANK);
   const set = (patch) => setF((p) => ({ ...p, ...patch }));
   const reset = () => setF(REPORT_BLANK);

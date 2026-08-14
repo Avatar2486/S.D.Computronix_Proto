@@ -219,7 +219,8 @@ function TopBar({ user, onSwitch, dark, setDark, onReset, viewMode, setViewMode,
   const { confirm, ConfirmUI } = useConfirm();
   const [openUser, setOpenUser] = useState(false);
   const [openNotif, setOpenNotif] = useState(false);
-  const notifs = user.role === 'field-employee' ? store.getNotifications(user.id) : store.state.notifications.slice().sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 12);
+  // Both mobile-only seats see their own notifications, not the admin-wide feed.
+  const notifs = isMobileOnlyRole(user) ? store.getNotifications(user.id) : store.state.notifications.slice().sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 12);
   const unread = notifs.filter((n) => !n.read).length;
 
   const resetDemo = async () => {
@@ -245,12 +246,13 @@ function TopBar({ user, onSwitch, dark, setDark, onReset, viewMode, setViewMode,
 
       <div className="flex-1 min-w-0"/>
 
-      {onNavigate && roleOf(user) !== 'field-employee' && <GlobalSearch user={user} onNavigate={onNavigate}/>}
+      {onNavigate && !isMobileOnlyRole(user) && <GlobalSearch user={user} onNavigate={onNavigate}/>}
 
       <PeriodClock/>
 
-      {/* View-mode switcher: Web / Split / Mobile */}
-      {user.role !== 'field-employee' && (
+      {/* View-mode switcher: Web / Split / Mobile — Admin and HR only. A Team
+          Lead is a mobile-only seat: no Web/Split desktop path, ever. */}
+      {!isMobileOnlyRole(user) && (
         <div data-tour="viewswitch" className="hidden sm:flex items-center rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden h-9" title="Switch between web dashboard, split, and mobile app view">
           {[
             { id: 'web',    label: 'Web',    icon: 'monitor' },
@@ -267,7 +269,7 @@ function TopBar({ user, onSwitch, dark, setDark, onReset, viewMode, setViewMode,
 
       {/* Utility cluster — icon-only, so the header stays compact at every width */}
       <div className="flex items-center gap-1">
-        {user.role !== 'field-employee' && (
+        {!isMobileOnlyRole(user) && (
           <button onClick={onTour} title="Guided tour" aria-label="Guided tour"
             className="hidden md:flex w-9 h-9 rounded-lg border border-slate-200 dark:border-slate-700 items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
             <Icon name="sparkle" className="w-4 h-4"/>
@@ -337,19 +339,33 @@ function TopBar({ user, onSwitch, dark, setDark, onReset, viewMode, setViewMode,
                   <div className="text-[11px] text-slate-500 truncate">{user.email || ROLE_LABEL[user.role]}</div>
                 </div>
               </div>
-              <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">Switch role / user</div>
-              <div className="max-h-64 overflow-auto">
-                {store.getUsers().concat(store.getEmployees({ status: 'active' }).slice(0, 40)).map((u) => (
-                  <button key={u.id} onClick={() => { onSwitch(u); setOpenUser(false); }} className={`w-full flex items-center gap-2.5 px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-left ${u.id === user.id ? 'bg-brand-50/70 dark:bg-brand-900/20' : ''}`}>
-                    <Avatar emp={u} size={26}/>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[12px] font-semibold text-slate-800 dark:text-slate-100 truncate">{u.name}</div>
-                      <div className="text-[10px] text-slate-500 dark:text-slate-400">{ROLE_LABEL[u.role]}</div>
-                    </div>
-                    {u.id === user.id && <Icon name="check" className="w-4 h-4 text-brand-700 shrink-0"/>}
-                  </button>
-                ))}
-              </div>
+              {/* A Team Lead or Employee is a mobile-only seat with no admin
+                  console to switch into — this demo aid has no production
+                  equivalent for them, so it does not appear at all. HR's own
+                  list also excludes Admin accounts: HR should not be able to
+                  self-escalate through a demo convenience. The real backstop
+                  either way is that every Store mutation checks the ACTOR, so
+                  even a successful switch can't exercise a permission the
+                  switched-to role lacks. */}
+              {!isMobileOnlyRole(user) && (
+                <>
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">Switch role / user</div>
+                  <div className="max-h-64 overflow-auto">
+                    {store.getUsers().concat(store.getEmployees({ status: 'active' }).slice(0, 40))
+                      .filter((u) => isAdmin(user) || roleOf(u) !== 'admin')
+                      .map((u) => (
+                      <button key={u.id} onClick={() => { onSwitch(u); setOpenUser(false); }} className={`w-full flex items-center gap-2.5 px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-left ${u.id === user.id ? 'bg-brand-50/70 dark:bg-brand-900/20' : ''}`}>
+                        <Avatar emp={u} size={26}/>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[12px] font-semibold text-slate-800 dark:text-slate-100 truncate">{u.name}</div>
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400">{ROLE_LABEL[u.role]}</div>
+                        </div>
+                        {u.id === user.id && <Icon name="check" className="w-4 h-4 text-brand-700 shrink-0"/>}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
               <div className="border-t border-slate-200 dark:border-slate-800 p-2">
                 <button onClick={onLogout} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-rose-50 dark:hover:bg-rose-900/20 text-[12px] font-semibold text-rose-600 dark:text-rose-400">
                   <Icon name="logout" className="w-4 h-4"/>Sign out
@@ -584,9 +600,15 @@ function AppShell({ user, onSwitch, onLogout, initialSplit }) {
     try { return localStorage.getItem('sdc_dark') === '1'; } catch (e) { return false; }
   });
   const isMobileUser = user.role === 'field-employee';
-  // View mode: 'web' | 'split' | 'mobile'. Field employees are locked to mobile.
+  // Team Lead is the other mobile-only seat — no Web/Split desktop path, ever
+  // (brief: "Team Lead has no Web/Split desktop path"). `isMobileOnlyRole`
+  // covers both; `isMobileUser` keeps its narrower original meaning ("this is
+  // a real self-service employee session") where that distinction still
+  // matters below (the tour, and which record the phone frame shows).
+  const forcedMobile = isMobileOnlyRole(user);
+  // View mode: 'web' | 'split' | 'mobile'. Field employees and Team Leads are locked to mobile.
   const [viewMode, setViewMode] = useState(() => {
-    if (isMobileUser) return 'mobile';
+    if (forcedMobile) return 'mobile';
     if (initialSplit) return 'split';
     try { return localStorage.getItem('sdc_view') || 'web'; } catch (e) { return 'web'; }
   });
@@ -608,7 +630,7 @@ function AppShell({ user, onSwitch, onLogout, initialSplit }) {
   };
 
   // Start the tour on the dashboard so its spotlight targets exist.
-  const startTour = () => { if (viewMode === 'mobile' && !isMobileUser) setViewMode('web'); setTourOpen(true); };
+  const startTour = () => { if (viewMode === 'mobile' && !forcedMobile) setViewMode('web'); setTourOpen(true); };
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
@@ -616,12 +638,22 @@ function AppShell({ user, onSwitch, onLogout, initialSplit }) {
   }, [dark]);
 
   useEffect(() => {
-    if (!isMobileUser) { try { localStorage.setItem('sdc_view', viewMode); } catch (e) {} }
-  }, [viewMode, isMobileUser]);
+    // Never persist a stale web/split preference while forced into mobile —
+    // otherwise switching back to Admin/HR later would silently inherit a
+    // view mode nobody chose for that session.
+    if (!forcedMobile) { try { localStorage.setItem('sdc_view', viewMode); } catch (e) {} }
+  }, [viewMode, forcedMobile]);
 
   // Keep view valid when switching users (e.g. admin -> field employee).
-  const effectiveMode = isMobileUser ? 'mobile' : viewMode;
-  const demoEmp = isMobileUser ? user : (Store.getEmployee('emp_001') || user);
+  const effectiveMode = forcedMobile ? 'mobile' : viewMode;
+  /* Whose record the phone frame shows. A real mobile session (field-employee
+     or Team Lead) always shows the logged-in person's OWN record — this used
+     to fall through to the hard-coded demo employee `emp_001` ("Rahul Verma")
+     for a Team Lead too, so switching into mobile view as a Team Lead showed
+     Rahul's individual KYC/incentive profile instead of the Team Lead's own
+     identity. Only an Admin/HR *previewing* the mobile experience falls back
+     to the emp_001 demo employee. */
+  const demoEmp = isMobileOnlyRole(user) ? user : (Store.getEmployee('emp_001') || user);
 
   return (
     <div className="h-screen flex flex-col bg-slate-50 dark:bg-[#0B0F1A]">
@@ -631,7 +663,7 @@ function AppShell({ user, onSwitch, onLogout, initialSplit }) {
         onToggleNav={effectiveMode === 'mobile' ? null : () => setMobileNavOpen((o) => !o)}/>
       <div className="flex-1 flex min-h-0">
         {effectiveMode === 'mobile' ? (
-          <PhoneStage user={demoEmp} onLogout={onLogout} label={isMobileUser ? null : `Employee App · ${demoEmp.name}`}/>
+          <PhoneStage user={demoEmp} onLogout={onLogout} label={isMobileOnlyRole(user) ? null : `Employee App · ${demoEmp.name}`}/>
         ) : effectiveMode === 'split' ? (
           <>
             <div className="flex-1 min-w-0 flex">
@@ -644,8 +676,9 @@ function AppShell({ user, onSwitch, onLogout, initialSplit }) {
           <AdminApp user={user} nav={nav} navArg={navArg} setNav={goTo} mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}/>
         )}
       </div>
-      {/* Desktop guided tour — admins only; field employees get the in-app mobile tour. */}
-      {tourOpen && !isMobileUser && <TourOverlay steps={ADMIN_TOUR_STEPS} onNavigate={goTo} onClose={() => { setTourOpen(false); try { localStorage.setItem('sdc_tour_seen','1'); } catch(e){} }}/>}
+      {/* Desktop guided tour — Admin/HR only; both mobile-only seats (field
+          employee, Team Lead) never see the desktop console it spotlights. */}
+      {tourOpen && !forcedMobile && <TourOverlay steps={ADMIN_TOUR_STEPS} onNavigate={goTo} onClose={() => { setTourOpen(false); try { localStorage.setItem('sdc_tour_seen','1'); } catch(e){} }}/>}
     </div>
   );
 }

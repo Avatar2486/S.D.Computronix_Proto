@@ -1,11 +1,17 @@
 /* Payroll: month view, payslip modal, CSV export */
 function PayslipModal({ payslip, emp, onClose }) {
+  const [showCalc, setShowCalc] = useState(false);
   if (!payslip || !emp) return null;
   const site = Store.getSite(emp.siteId);
   return (
+    <>
     <Modal open onClose={onClose} size="xl" icon="wallet"
       title={`Payslip · ${fmtMonth(payslip.month)}`} subtitle={`${emp.name} · ${emp.code}`}
       footer={<>
+        {/* Same authoritative calculation the Incentives dashboard shows, plus
+            the audit trail of who last touched the rule/slab/target behind it
+            — the one place this payslip's incentive line can be fully traced. */}
+        <Btn onClick={() => setShowCalc(true)}><Icon name="trending-up" className="w-3.5 h-3.5"/>View incentive calculation</Btn>
         <Btn onClick={() => window.print()}><Icon name="print" className="w-3.5 h-3.5"/>Print / Save PDF</Btn>
         <Btn onClick={() => downloadCSV(`payslip_${emp.code}_${payslip.month}.csv`, [
           ['Field','Value'],
@@ -119,6 +125,8 @@ function PayslipModal({ payslip, emp, onClose }) {
         <div className="text-[10px] text-slate-500 mt-4 border-t border-slate-200 pt-2 text-center">This is a computer-generated payslip and does not require a signature.</div>
       </div>
     </Modal>
+    {showCalc && <IncentiveCalcDrawer empId={emp.id} month={payslip.month} onClose={() => setShowCalc(false)}/>}
+    </>
   );
 }
 

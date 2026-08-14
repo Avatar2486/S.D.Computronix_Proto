@@ -94,8 +94,7 @@ function EmployeePicker({ value, onChange, placeholder = 'Search technician…' 
     <div className="relative">
       {selected ? (
         <div className="flex items-center gap-2 h-9 px-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800">
-          <Avatar emp={selected} size={22}/>
-          <div className="flex-1 min-w-0 text-[12px] font-semibold text-slate-800 dark:text-slate-100 truncate">{selected.name} <span className="text-slate-400 font-normal">{selected.code}</span></div>
+          <EmployeeIdentity emp={selected} className="flex-1 min-w-0"/>
           <button onClick={() => { onChange(null); setQ(''); }} className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700"><Icon name="x" className="w-3.5 h-3.5"/></button>
         </div>
       ) : (
@@ -108,8 +107,7 @@ function EmployeePicker({ value, onChange, placeholder = 'Search technician…' 
         <div className="absolute z-20 mt-1 w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-pop max-h-64 overflow-auto">
           {matches.map((e) => (
             <button key={e.id} onClick={() => { onChange(e.id); setOpen(false); setQ(''); }} className="w-full flex items-center gap-2 px-2.5 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-left">
-              <Avatar emp={e} size={24}/>
-              <div className="flex-1 min-w-0"><div className="text-[12px] font-semibold text-slate-800 dark:text-slate-100 truncate">{e.name}</div><div className="text-[10px] text-slate-500">{store.getSite(e.siteId)?.name}</div></div>
+              <EmployeeIdentity emp={e} className="flex-1 min-w-0"/>
             </button>
           ))}
         </div>
